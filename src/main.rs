@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use clap::{Args, Parser, Subcommand};
 use std::fs;
 use std::io;
@@ -73,35 +72,20 @@ mod percent {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
-enum DeviceClass {
-    Backlight,
-    Leds,
-}
-
-impl DeviceClass {
-    fn prefix(&self) -> &'static str {
-        match self {
-            DeviceClass::Backlight => "/sys/class/backlight",
-            DeviceClass::Leds => "/sys/class/leds",
-        }
-    }
-}
+const PREFIX: &str = "/sys/class/backlight";
 
 type Brightness = u16;
 
 #[derive(Debug, Clone)]
 struct Device {
     name: String,
-    // This is the only attribute that might change when updating the brightness
     brightness: Brightness,
     max_brightness: Brightness,
-    class: DeviceClass,
 }
 
 impl Device {
     fn set_brightness(&mut self, value: Brightness) -> io::Result<()> {
-        let path = Path::new(self.class.prefix())
+        let path = Path::new(PREFIX)
             .join(&self.name)
             .join("brightness");
         let brightness = value.min(self.max_brightness);
@@ -110,8 +94,8 @@ impl Device {
         Ok(())
     }
 
-    fn get_all(class: DeviceClass) -> Vec<Self> {
-        let Ok(read_dir) = Path::new(class.prefix()).read_dir() else {
+    fn get_all() -> Vec<Self> {
+        let Ok(read_dir) = Path::new(PREFIX).read_dir() else {
             return Vec::new();
         };
 
@@ -143,7 +127,6 @@ impl Device {
                     name,
                     brightness,
                     max_brightness,
-                    class,
                 }
             })
             .collect::<Vec<_>>();
@@ -157,7 +140,7 @@ fn update_brightness<F>(args: &SubArgs, calc_brightness: F) -> ExitCode
 where
     F: FnOnce(&Device, Brightness) -> Brightness,
 {
-    let mut devices = Device::get_all(DeviceClass::Backlight);
+    let mut devices = Device::get_all();
     let Some(device) = devices.first_mut() else {
         eprintln!("no device found");
         return ExitCode::FAILURE;
@@ -211,7 +194,7 @@ fn main() -> ExitCode {
         }),
         Command::Set(args) => update_brightness(&args, |_, brightness| brightness),
         Command::Get => {
-            let devices = Device::get_all(DeviceClass::Backlight);
+            let devices = Device::get_all();
             if let Some(device) = devices.first() {
                 let percent = Percent::from_brightness(device.brightness, device.max_brightness);
                 println!("{}", percent.get());
@@ -221,10 +204,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Info => {
-            for device in Device::get_all(DeviceClass::Backlight) {
-                println!("{device:#?}");
-            }
-            for device in Device::get_all(DeviceClass::Leds) {
+            for device in Device::get_all() {
                 println!("{device:#?}");
             }
             ExitCode::SUCCESS
