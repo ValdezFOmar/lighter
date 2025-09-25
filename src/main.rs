@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 use clap::{Args, Parser, Subcommand};
-use std::convert::From;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -15,11 +14,21 @@ mod percent {
     pub struct Percent(u8);
 
     impl Percent {
-        pub fn new(value: u8) -> Option<Percent> {
+        pub fn new(value: u8) -> Option<Self> {
             match value {
-                0..=100 => Some(Percent(value)),
+                0..=100 => Some(Self(value)),
                 _ => None,
             }
+        }
+
+        pub fn get(&self) -> u8 {
+            self.0
+        }
+
+        pub fn from_brightness(brightness: Brightness, max_brightness: Brightness) -> Self {
+            let percent = ((brightness as f32).log10() * 100.0) / (max_brightness as f32).log10();
+            Self::new(percent as u8)
+                .expect("calculation of percent to always fall in the range 0..=100")
         }
 
         /// Convert to a brightness value relative to a maximum brightness.
@@ -47,20 +56,20 @@ mod percent {
 
     #[test]
     fn test_percent_to_brightness() {
-        assert_eq!(Percent(0).to_brightness(100), 0);
-        assert_eq!(Percent(10).to_brightness(100), 1);
-        assert_eq!(Percent(20).to_brightness(100), 2);
-        assert_eq!(Percent(30).to_brightness(100), 3);
-        assert_eq!(Percent(40).to_brightness(100), 6);
-        assert_eq!(Percent(50).to_brightness(100), 10);
-        assert_eq!(Percent(60).to_brightness(100), 15);
-        assert_eq!(Percent(70).to_brightness(100), 25);
-        assert_eq!(Percent(80).to_brightness(100), 39);
-        assert_eq!(Percent(90).to_brightness(100), 63);
-        assert_eq!(Percent(95).to_brightness(100), 79);
-        assert_eq!(Percent(99).to_brightness(100), 95);
-        assert_eq!(Percent(100).to_brightness(100), 100);
-        assert_eq!(Percent(100).to_brightness(12345), 12345);
+        assert_eq!(Percent::new(0).unwrap().to_brightness(100), 0);
+        assert_eq!(Percent::new(10).unwrap().to_brightness(100), 1);
+        assert_eq!(Percent::new(20).unwrap().to_brightness(100), 2);
+        assert_eq!(Percent::new(30).unwrap().to_brightness(100), 3);
+        assert_eq!(Percent::new(40).unwrap().to_brightness(100), 6);
+        assert_eq!(Percent::new(50).unwrap().to_brightness(100), 10);
+        assert_eq!(Percent::new(60).unwrap().to_brightness(100), 15);
+        assert_eq!(Percent::new(70).unwrap().to_brightness(100), 25);
+        assert_eq!(Percent::new(80).unwrap().to_brightness(100), 39);
+        assert_eq!(Percent::new(90).unwrap().to_brightness(100), 63);
+        assert_eq!(Percent::new(95).unwrap().to_brightness(100), 79);
+        assert_eq!(Percent::new(99).unwrap().to_brightness(100), 95);
+        assert_eq!(Percent::new(100).unwrap().to_brightness(100), 100);
+        assert_eq!(Percent::new(100).unwrap().to_brightness(12345), 12345);
     }
 }
 
@@ -150,7 +159,7 @@ where
 {
     let mut devices = Device::get_all(DeviceClass::Backlight);
     let Some(device) = devices.first_mut() else {
-        eprint!("no device found");
+        eprintln!("no device found");
         return ExitCode::FAILURE;
     };
 
@@ -159,11 +168,12 @@ where
         .to_brightness(device.max_brightness);
     let total_brightness = calc_brightness(&device, brightness);
 
-    if let Err(error) = device.set_brightness(total_brightness) {
-        eprint!("{error}");
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
+    match device.set_brightness(total_brightness) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
     }
 }
 
@@ -202,9 +212,11 @@ fn main() -> ExitCode {
         Command::Set(args) => update_brightness(&args, |_, brightness| brightness),
         Command::Get => {
             let devices = Device::get_all(DeviceClass::Backlight);
-            match devices.first() {
-                Some(device) => println!("{}", device.brightness),
-                None => eprint!("no devices found"),
+            if let Some(device) = devices.first() {
+                let percent = Percent::from_brightness(device.brightness, device.max_brightness);
+                println!("{}", percent.get());
+            } else {
+                eprintln!("no devices found");
             };
             ExitCode::SUCCESS
         }
