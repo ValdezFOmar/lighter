@@ -27,9 +27,10 @@ Formula for calculating the perceived percentage of a given value:
 
 ```
 # value to percent
-percent = (log10(value) * 100) / log10(max_value)
+percent = log10(value) * 100 / log10(max_value)
+        = log(value, base=max_value) * 100
 # percent to value
-value = floor(10 ^ ((percent * log10(max_value)) / 100))
+value = 10 ^ (percent * log10(max_value) / 100)
 ```
 
 [perception]: https://konradstrack.ninja/blog/changing-screen-brightness-in-accordance-with-human-perception/
