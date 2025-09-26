@@ -53,6 +53,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "assert_float_eq"
+version = "1.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10d2119f741b79fe9907f5396d19bffcb46568cfcc315e78677d731972ac7085"
+
+[[package]]
 name = "clap"
 version = "4.5.48"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -114,6 +120,7 @@ checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
 name = "lighter"
 version = "0.1.0"
 dependencies = [
+ "assert_float_eq",
  "clap",
 ]
 
