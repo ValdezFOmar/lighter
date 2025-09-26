@@ -7,7 +7,9 @@ use std::process::ExitCode;
 use crate::percent::Percent;
 
 mod percent {
-    #[derive(Debug, Clone, PartialEq)]
+    use core::ops::{Add, Sub};
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
     pub struct Percent(f32);
 
     impl Percent {
@@ -17,6 +19,22 @@ mod percent {
 
         pub fn get(&self) -> f32 {
             self.0
+        }
+    }
+
+    impl Add for Percent {
+        type Output = Self;
+
+        fn add(self, rhs: Self) -> Self::Output {
+            Self::new((self.0 + rhs.0).min(100.0)).expect("percent to not be greater than 100")
+        }
+    }
+
+    impl Sub for Percent {
+        type Output = Self;
+
+        fn sub(self, rhs: Self) -> Self::Output {
+            Self::new((self.0 - rhs.0).max(0.0)).expect("percent to not be less than 0")
         }
     }
 
@@ -126,9 +144,9 @@ pub fn brightness_to_percent(brightness: Brightness, max_brightness: Brightness)
     Percent::new(percent).expect("percent calculcation to always give a valid value")
 }
 
-fn update_brightness<F>(args: &UpdateArgs, calc_brightness: F) -> ExitCode
+fn update_brightness<F>(args: &UpdateArgs, calc_percent: F) -> ExitCode
 where
-    F: FnOnce(&Device, Brightness) -> Brightness,
+    F: FnOnce(Percent) -> Percent,
 {
     let mut devices = Device::get_all();
     let Some(device) = devices.first_mut() else {
@@ -136,13 +154,13 @@ where
         return ExitCode::FAILURE;
     };
 
-    let brightness = brightness_from_percent(&args.percent, device.max_brightness);
-    let total_brightness = calc_brightness(device, brightness);
+    let percent = calc_percent(brightness_to_percent(device.brightness, device.max_brightness));
+    let brightness = brightness_from_percent(&percent, device.max_brightness);
 
     let result = if args.simulate {
-        Ok(total_brightness)
+        Ok(brightness)
     } else {
-        device.set_brightness(total_brightness).and_then(|_| Ok(device.brightness))
+        device.set_brightness(brightness).and_then(|_| Ok(device.brightness))
     };
 
     match result {
@@ -186,7 +204,7 @@ struct UpdateArgs {
     percent: Percent,
 
     /// Do not modify the brightness, only pretend that it does.
-    #[arg(long)]
+    #[arg(short, long)]
     simulate: bool,
 }
 
@@ -194,9 +212,9 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Add(args) => update_brightness(&args, |dev, b| dev.brightness.saturating_add(b)),
-        Command::Sub(args) => update_brightness(&args, |dev, b| dev.brightness.saturating_sub(b)),
-        Command::Set(args) => update_brightness(&args, |_, brightness| brightness),
+        Command::Add(args) => update_brightness(&args, |percent| percent + args.percent),
+        Command::Sub(args) => update_brightness(&args, |percent| percent - args.percent),
+        Command::Set(args) => update_brightness(&args, |_| args.percent),
         Command::Get => {
             let devices = Device::get_all();
             if let Some(device) = devices.first() {
@@ -225,13 +243,6 @@ mod test {
     fn test_cli() {
         Cli::command().debug_assert();
     }
-
-    // TODO:
-    // These tests should be the inverse of each other,
-    // but since the percentage is rounded to a integer it causes loss of precision,
-    // which becomes more noticeable for the smaller brightness values.
-    // `Percent` should really support fractional values, which would also require support
-    // for decimal percentages in the CLI (custom validator).
 
     #[test]
     fn test_brightness_from_percent() {
