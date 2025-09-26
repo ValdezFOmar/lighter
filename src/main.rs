@@ -126,7 +126,7 @@ pub fn brightness_to_percent(brightness: Brightness, max_brightness: Brightness)
     Percent::new(percent).expect("percent calculcation to always give a valid value")
 }
 
-fn update_brightness<F>(args: &SubArgs, calc_brightness: F) -> ExitCode
+fn update_brightness<F>(args: &UpdateArgs, calc_brightness: F) -> ExitCode
 where
     F: FnOnce(&Device, Brightness) -> Brightness,
 {
@@ -139,8 +139,18 @@ where
     let brightness = brightness_from_percent(&args.percent, device.max_brightness);
     let total_brightness = calc_brightness(device, brightness);
 
-    match device.set_brightness(total_brightness) {
-        Ok(()) => ExitCode::SUCCESS,
+    let result = if args.simulate {
+        Ok(total_brightness)
+    } else {
+        device.set_brightness(total_brightness).and_then(|_| Ok(device.brightness))
+    };
+
+    match result {
+        Ok(brightness) => {
+            let percent = brightness_to_percent(brightness, device.max_brightness).get();
+            println!("{percent:.2}");
+            ExitCode::SUCCESS
+        }
         Err(error) => {
             eprintln!("{error}");
             ExitCode::FAILURE
@@ -157,17 +167,27 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    Add(SubArgs),
-    Sub(SubArgs),
-    Set(SubArgs),
+    /// Increment brightness by the given percentage.
+    Add(UpdateArgs),
+    /// Decrease brightness by the given percentage.
+    Sub(UpdateArgs),
+    /// Set brightness to the given percentage.
+    Set(UpdateArgs),
+    /// Get current brightness as a percentage.
     Get,
+    /// Get information about backlight devices.
     Info,
 }
 
 #[derive(Debug, Args)]
-struct SubArgs {
+struct UpdateArgs {
+    /// Value in the range [0, 100], supports decimals (e.g. 10.5).
     #[arg(value_parser = percent::clap_parser)]
     percent: Percent,
+
+    /// Do not modify the brightness, only pretend that it does.
+    #[arg(long)]
+    simulate: bool,
 }
 
 fn main() -> ExitCode {
