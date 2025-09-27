@@ -17,7 +17,7 @@ mod percent {
             if p.is_finite() && (0.0..=100.0).contains(&p) { Some(Self(p)) } else { None }
         }
 
-        pub fn get(&self) -> f32 {
+        pub fn get(self) -> f32 {
             self.0
         }
     }
@@ -87,7 +87,7 @@ impl Device {
         };
 
         let mut devices = read_dir
-            .filter_map(|entry| entry.ok())
+            .filter_map(Result::ok)
             .map(|entry| entry.path())
             .filter(|path| path.is_dir())
             .map(|path| {
@@ -110,7 +110,7 @@ impl Device {
 
                 assert!(brightness <= max_brightness);
 
-                Device { name, brightness, max_brightness }
+                Self { name, brightness, max_brightness }
             })
             .collect::<Vec<_>>();
 
@@ -128,7 +128,7 @@ pub fn brightness_from_percent(percent: &Percent, max_brightness: Brightness) ->
     if percent == 0.0 || max_brightness == 0 {
         return 0;
     }
-    let exp = (percent / 100.0) * (max_brightness as f32).log10();
+    let exp = (percent / 100.0) * f32::from(max_brightness).log10();
     (10_f32).powf(exp).round() as Brightness // Float to integer is a saturated cast
 }
 
@@ -138,9 +138,9 @@ pub fn brightness_to_percent(brightness: Brightness, max_brightness: Brightness)
         return Percent::new(0.0).unwrap();
     }
     if max_brightness <= 1 {
-        return Percent::new(if brightness <= max_brightness { 0.0 } else { 100.0 }).unwrap();
+        return Percent::new(if brightness < max_brightness { 0.0 } else { 100.0 }).unwrap();
     }
-    let percent = (brightness as f32).log(max_brightness as f32) * 100.0;
+    let percent = f32::from(brightness).log(f32::from(max_brightness)) * 100.0;
     Percent::new(percent).expect("percent calculcation to always give a valid value")
 }
 
@@ -160,7 +160,7 @@ where
     let result = if args.simulate {
         Ok(brightness)
     } else {
-        device.set_brightness(brightness).and_then(|_| Ok(device.brightness))
+        device.set_brightness(brightness).map(|()| device.brightness)
     };
 
     match result {
@@ -222,7 +222,7 @@ fn main() -> ExitCode {
                 println!("{percent:.2}");
             } else {
                 eprintln!("no devices found");
-            };
+            }
             ExitCode::SUCCESS
         }
         Command::Info => {
