@@ -14,7 +14,11 @@ mod percent {
 
     impl Percent {
         pub fn new(p: f32) -> Option<Self> {
-            if p.is_finite() && (0.0..=100.0).contains(&p) { Some(Self(p)) } else { None }
+            if p.is_finite() && (0.0..=100.0).contains(&p) {
+                Some(Self(p))
+            } else {
+                None
+            }
         }
 
         pub fn get(self) -> f32 {
@@ -39,7 +43,9 @@ mod percent {
     }
 
     pub fn clap_parser(s: &str) -> Result<Percent, String> {
-        let percent: f32 = s.parse().map_err(|_| format!("`{s}` is not a percentage"))?;
+        let percent: f32 = s
+            .parse()
+            .map_err(|_| format!("`{s}` is not a percentage"))?;
         match Percent::new(percent) {
             Some(p) => Ok(p),
             None => Err(format!("`{s}` is not a percentage between 0 and 100")),
@@ -84,7 +90,10 @@ impl Device {
 
     fn get(prefix: impl AsRef<Path>) -> io::Result<Self> {
         fn parse_brightness(path: &Path) -> io::Result<Brightness> {
-            fs::read_to_string(path)?.trim().parse::<Brightness>().map_err(io::Error::other)
+            fs::read_to_string(path)?
+                .trim()
+                .parse::<Brightness>()
+                .map_err(io::Error::other)
         }
 
         fn inner(prefix: &Path) -> io::Result<Device> {
@@ -102,7 +111,12 @@ impl Device {
                 "brightness = {brightness} > max_brightness = {max_brightness}"
             );
 
-            Ok(Device { name, brightness, max_brightness, prefix: PathBuf::from(prefix) })
+            Ok(Device {
+                name,
+                brightness,
+                max_brightness,
+                prefix: PathBuf::from(prefix),
+            })
         }
 
         inner(prefix.as_ref())
@@ -148,10 +162,15 @@ pub fn brightness_to_percent(brightness: Brightness, max_brightness: Brightness)
         return Percent::new(0.0).unwrap();
     }
     if max_brightness <= 1 {
-        return Percent::new(if brightness < max_brightness { 0.0 } else { 100.0 }).unwrap();
+        let percent = if brightness < max_brightness {
+            0.0
+        } else {
+            100.0
+        };
+        return Percent::new(percent).unwrap();
     }
     let percent = f32::from(brightness).log(f32::from(max_brightness)) * 100.0;
-    Percent::new(percent).expect("percent calculcation to always give a valid value")
+    Percent::new(percent).expect("percent calculation to always give a valid value")
 }
 
 fn update_brightness<F>(args: &UpdateArgs, calc_percent: F) -> ExitCode
@@ -170,7 +189,9 @@ where
     let result = if args.simulate {
         Ok(brightness)
     } else {
-        device.set_brightness(brightness).map(|()| device.brightness)
+        device
+            .set_brightness(brightness)
+            .map(|()| device.brightness)
     };
 
     match result {
