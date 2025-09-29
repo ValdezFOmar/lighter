@@ -1,7 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::percent::Percent;
@@ -68,50 +68,60 @@ type Brightness = u16;
 #[derive(Debug, Clone)]
 struct Device {
     name: String,
+    prefix: PathBuf,
     brightness: Brightness,
     max_brightness: Brightness,
 }
 
 impl Device {
     fn set_brightness(&mut self, value: Brightness) -> io::Result<()> {
-        let path = Path::new(PREFIX).join(&self.name).join("brightness");
+        let path = self.prefix.join(&self.name).join("brightness");
         let brightness = value.min(self.max_brightness);
         fs::write(path, brightness.to_string())?;
         self.brightness = brightness;
         Ok(())
     }
 
-    fn get_all() -> Vec<Self> {
-        let Ok(read_dir) = Path::new(PREFIX).read_dir() else {
-            return Vec::new();
+    fn get(prefix: impl AsRef<Path>) -> io::Result<Self> {
+        fn parse_brightness(path: &Path) -> io::Result<Brightness> {
+            fs::read_to_string(path)?.trim().parse::<Brightness>().map_err(io::Error::other)
+        }
+
+        fn inner(prefix: &Path) -> io::Result<Device> {
+            let name = prefix
+                .file_name()
+                .ok_or_else(|| io::Error::other(format!("{prefix:#?} has no file name")))?
+                .to_string_lossy()
+                .to_string();
+
+            let brightness = parse_brightness(&prefix.join("brightness"))?;
+            let max_brightness = parse_brightness(&prefix.join("max_brightness"))?;
+
+            assert!(
+                brightness <= max_brightness,
+                "brightness = {brightness} > max_brightness = {max_brightness}"
+            );
+
+            Ok(Device { name, brightness, max_brightness, prefix: PathBuf::from(prefix) })
+        }
+
+        inner(prefix.as_ref())
+    }
+
+    fn get_all(prefix: &str) -> Vec<Self> {
+        let read_dir = match fs::read_dir(prefix) {
+            Ok(x) => x,
+            Err(err) => {
+                eprintln!("{err}");
+                return Vec::new();
+            }
         };
 
         let mut devices = read_dir
-            .filter_map(Result::ok)
+            .filter_map(|entry| entry.inspect_err(|err| eprintln!("{err}")).ok())
             .map(|entry| entry.path())
             .filter(|path| path.is_dir())
-            .map(|path| {
-                let name = path
-                    .file_name()
-                    .expect("the path to have a name")
-                    .to_str()
-                    .expect("the name to be valid UTF-8")
-                    .to_string();
-                let brightness = fs::read_to_string(path.join("brightness"))
-                    .expect("brightness file to exists")
-                    .trim()
-                    .parse::<Brightness>()
-                    .expect("brightness to be an integer");
-                let max_brightness = fs::read_to_string(path.join("max_brightness"))
-                    .expect("max_brightness file to exists")
-                    .trim()
-                    .parse::<Brightness>()
-                    .expect("max_brightness to be an integer");
-
-                assert!(brightness <= max_brightness);
-
-                Self { name, brightness, max_brightness }
-            })
+            .filter_map(|path| Self::get(path).inspect_err(|err| eprintln!("{err}")).ok())
             .collect::<Vec<_>>();
 
         devices.sort_by(|dev1, dev2| dev1.name.cmp(&dev2.name));
@@ -148,7 +158,7 @@ fn update_brightness<F>(args: &UpdateArgs, calc_percent: F) -> ExitCode
 where
     F: FnOnce(Percent) -> Percent,
 {
-    let mut devices = Device::get_all();
+    let mut devices = Device::get_all(PREFIX);
     let Some(device) = devices.first_mut() else {
         eprintln!("no device found");
         return ExitCode::FAILURE;
@@ -203,7 +213,7 @@ struct UpdateArgs {
     #[arg(value_parser = percent::clap_parser)]
     percent: Percent,
 
-    /// Do not modify the brightness, only pretend that it does.
+    /// Do not modify the brightness, only pretend to do it.
     #[arg(short, long)]
     simulate: bool,
 }
@@ -216,7 +226,7 @@ fn main() -> ExitCode {
         Command::Sub(args) => update_brightness(&args, |percent| percent - args.percent),
         Command::Set(args) => update_brightness(&args, |_| args.percent),
         Command::Get => {
-            let devices = Device::get_all();
+            let devices = Device::get_all(PREFIX);
             if let Some(device) = devices.first() {
                 let percent = brightness_to_percent(device.brightness, device.max_brightness).get();
                 println!("{percent:.2}");
@@ -226,7 +236,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Info => {
-            for device in Device::get_all() {
+            for device in Device::get_all(PREFIX) {
                 println!("{device:#?}");
             }
             ExitCode::SUCCESS
