@@ -1,4 +1,7 @@
 use clap::{Args, Parser, Subcommand};
+use serde::Deserialize;
+use serde::Serialize;
+use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -68,31 +71,34 @@ mod percent {
 }
 
 const PREFIX: &str = "/sys/class/backlight";
+const DATA_FILE_NAME: &str = "device-data.json";
 
 type Brightness = u16;
 
 #[derive(Debug, Clone)]
 struct Device {
+    /// Device name, derived from its path.
     name: String,
-    prefix: PathBuf,
+    /// Full path to the device, including its name.
+    path: PathBuf,
     brightness: Brightness,
     max_brightness: Brightness,
 }
 
 impl Device {
     fn set_brightness(&mut self, value: Brightness) -> io::Result<()> {
-        let path = self.prefix.join(&self.name).join("brightness");
+        let path = self.path.join("brightness");
         let brightness = value.min(self.max_brightness);
         fs::write(path, brightness.to_string())?;
         self.brightness = brightness;
         Ok(())
     }
 
-    fn get(prefix: impl AsRef<Path>) -> io::Result<Self> {
+    fn from_path(prefix: impl AsRef<Path>) -> io::Result<Self> {
         fn parse_brightness(path: &Path) -> io::Result<Brightness> {
             fs::read_to_string(path)?
                 .trim()
-                .parse::<Brightness>()
+                .parse()
                 .map_err(io::Error::other)
         }
 
@@ -115,11 +121,30 @@ impl Device {
                 name,
                 brightness,
                 max_brightness,
-                prefix: PathBuf::from(prefix),
+                path: PathBuf::from(prefix),
             })
         }
 
         inner(prefix.as_ref())
+    }
+
+    // Returns the first encountered device under the given `prefix`.
+    // Which device is "first" is determined by alphabetical order.
+    fn get(prefix: &str) -> io::Result<Self> {
+        let read_dir = fs::read_dir(prefix)?;
+
+        let mut paths = read_dir
+            .filter_map(|entry| entry.inspect_err(|err| eprintln!("{err}")).ok())
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect::<Vec<_>>();
+        paths.sort();
+
+        let path = paths
+            .first()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no devices found"))?;
+
+        Self::from_path(path)
     }
 
     fn get_all(prefix: &str) -> Vec<Self> {
@@ -135,7 +160,11 @@ impl Device {
             .filter_map(|entry| entry.inspect_err(|err| eprintln!("{err}")).ok())
             .map(|entry| entry.path())
             .filter(|path| path.is_dir())
-            .filter_map(|path| Self::get(path).inspect_err(|err| eprintln!("{err}")).ok())
+            .filter_map(|path| {
+                Self::from_path(path)
+                    .inspect_err(|err| eprintln!("{err}"))
+                    .ok()
+            })
             .collect::<Vec<_>>();
 
         devices.sort_by(|dev1, dev2| dev1.name.cmp(&dev2.name));
@@ -173,38 +202,57 @@ pub fn brightness_to_percent(brightness: Brightness, max_brightness: Brightness)
     Percent::new(percent).expect("percent calculation to always give a valid value")
 }
 
-fn update_brightness<F>(args: &UpdateArgs, calc_percent: F) -> ExitCode
-where
-    F: FnOnce(Percent) -> Percent,
-{
-    let mut devices = Device::get_all(PREFIX);
-    let Some(device) = devices.first_mut() else {
-        eprintln!("no device found");
-        return ExitCode::FAILURE;
-    };
+enum UpdateAction {
+    Add,
+    Sub,
+    Set,
+}
 
-    let percent = calc_percent(brightness_to_percent(device.brightness, device.max_brightness));
+fn update_brightness(args: &UpdateArgs, action: UpdateAction) -> io::Result<()> {
+    let mut device = Device::get(PREFIX)?;
+
+    let percent = match action {
+        UpdateAction::Add => {
+            brightness_to_percent(device.brightness, device.max_brightness) + args.percent
+        }
+        UpdateAction::Sub => {
+            brightness_to_percent(device.brightness, device.max_brightness) - args.percent
+        }
+        UpdateAction::Set => args.percent,
+    };
     let brightness = brightness_from_percent(&percent, device.max_brightness);
 
-    let result = if args.simulate {
+    let brightness = if args.simulate {
         Ok(brightness)
     } else {
         device
             .set_brightness(brightness)
             .map(|()| device.brightness)
+    }?;
+
+    let percent = brightness_to_percent(brightness, device.max_brightness).get();
+    println!("{percent:.2}");
+
+    Ok(())
+}
+
+fn get_xdg_path() -> Option<PathBuf> {
+    let base_path = match env::var_os("XDG_STATE_HOME") {
+        Some(p) if !p.is_empty() => PathBuf::from(p),
+        _ => env::home_dir()?,
     };
 
-    match result {
-        Ok(brightness) => {
-            let percent = brightness_to_percent(brightness, device.max_brightness).get();
-            println!("{percent:.2}");
-            ExitCode::SUCCESS
-        }
-        Err(error) => {
-            eprintln!("{error}");
-            ExitCode::FAILURE
-        }
+    if base_path.is_absolute() {
+        Some(base_path.join("lighter"))
+    } else {
+        None
     }
+}
+
+#[derive(Serialize, Deserialize)]
+struct DeviceData {
+    path: PathBuf,
+    brightness: Brightness,
 }
 
 #[derive(Debug, Parser)]
@@ -212,6 +260,61 @@ where
 struct Cli {
     #[command(subcommand)]
     command: Command,
+}
+
+impl Cli {
+    fn run(self) -> Result<(), Box<dyn core::error::Error>> {
+        match self.command {
+            Command::Add(args) => update_brightness(&args, UpdateAction::Add)?,
+            Command::Sub(args) => update_brightness(&args, UpdateAction::Sub)?,
+            Command::Set(args) => update_brightness(&args, UpdateAction::Set)?,
+            Command::Get => {
+                let device = Device::get(PREFIX)?;
+                let percent = brightness_to_percent(device.brightness, device.max_brightness).get();
+                println!("{percent:.2}");
+            }
+            Command::Info => {
+                for device in Device::get_all(PREFIX) {
+                    println!("{device:#?}");
+                }
+            }
+            Command::Save(args) => {
+                let path = args.path.or_else(get_xdg_path).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "could not determine a valid path")
+                })?;
+                let device = Device::get(PREFIX)?;
+                let data = DeviceData {
+                    path: device.path.clone(),
+                    brightness: device.brightness,
+                };
+                fs::create_dir_all(&path)?;
+                fs::write(path.join(DATA_FILE_NAME), serde_json::to_string(&data)?)?;
+            }
+            Command::Restore(args) => {
+                let path = args
+                    .path
+                    .or_else(get_xdg_path)
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "could not determine a valid path",
+                        )
+                    })?
+                    .join(DATA_FILE_NAME);
+
+                let content = fs::read(&path)?;
+                let data: DeviceData = serde_json::from_slice(&content)?;
+                let mut device = Device::from_path(data.path)?;
+                device.set_brightness(data.brightness)?;
+                println!(
+                    r#"restored device "{}" with brightness: {}"#,
+                    device.name, device.brightness
+                );
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -226,6 +329,10 @@ enum Command {
     Get,
     /// Get information about backlight devices.
     Info,
+    /// Save current brightness
+    Save(SaveArgs),
+    /// Restore brightness (inverse of `save` command)
+    Restore(SaveArgs),
 }
 
 #[derive(Debug, Args)]
@@ -239,29 +346,19 @@ struct UpdateArgs {
     simulate: bool,
 }
 
+#[derive(Debug, Args)]
+struct SaveArgs {
+    #[arg(short, long)]
+    path: Option<PathBuf>,
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
-
-    match cli.command {
-        Command::Add(args) => update_brightness(&args, |percent| percent + args.percent),
-        Command::Sub(args) => update_brightness(&args, |percent| percent - args.percent),
-        Command::Set(args) => update_brightness(&args, |_| args.percent),
-        Command::Get => {
-            let devices = Device::get_all(PREFIX);
-            if let Some(device) = devices.first() {
-                let percent = brightness_to_percent(device.brightness, device.max_brightness).get();
-                println!("{percent:.2}");
-            } else {
-                eprintln!("no devices found");
-            }
-            ExitCode::SUCCESS
-        }
-        Command::Info => {
-            for device in Device::get_all(PREFIX) {
-                println!("{device:#?}");
-            }
-            ExitCode::SUCCESS
-        }
+    if let Err(err) = cli.run() {
+        eprintln!("{err}");
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
     }
 }
 
