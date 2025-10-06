@@ -1,6 +1,6 @@
 use clap::{Args, Parser, Subcommand};
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::env;
 use std::fs;
 use std::io;
@@ -121,15 +121,15 @@ impl Device {
                 name,
                 brightness,
                 max_brightness,
-                path: PathBuf::from(prefix),
+                path: prefix.to_path_buf(),
             })
         }
 
         inner(prefix.as_ref())
     }
 
-    // Returns the first encountered device under the given `prefix`.
-    // Which device is "first" is determined by alphabetical order.
+    /// Returns the first encountered device under the given `prefix`.
+    /// Which device is "first" is determined by alphabetical order.
     fn get(prefix: &str) -> io::Result<Self> {
         let read_dir = fs::read_dir(prefix)?;
 
@@ -236,17 +236,24 @@ fn update_brightness(args: &UpdateArgs, action: UpdateAction) -> io::Result<()> 
     Ok(())
 }
 
-fn get_xdg_path() -> Option<PathBuf> {
-    let base_path = match env::var_os("XDG_STATE_HOME") {
-        Some(p) if !p.is_empty() => PathBuf::from(p),
-        _ => env::home_dir()?,
-    };
+fn get_save_path(default: Option<&PathBuf>) -> io::Result<Cow<'_, Path>> {
+    default
+        .map(Cow::from)
+        .or_else(|| {
+            let base_path = match env::var_os("XDG_STATE_HOME") {
+                Some(p) if !p.is_empty() => PathBuf::from(p),
+                _ => env::home_dir()?.join(".local/state"),
+            };
 
-    if base_path.is_absolute() {
-        Some(base_path.join("lighter"))
-    } else {
-        None
-    }
+            if base_path.is_absolute() {
+                Some(Cow::from(base_path.join("lighter")))
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "could not determine a valid path")
+        })
 }
 
 #[derive(Serialize, Deserialize)]
@@ -278,31 +285,25 @@ impl Cli {
                     println!("{device:#?}");
                 }
             }
+            Command::Save(args) | Command::Restore(args) if args.print_defaults => {
+                let path = get_save_path(None)?;
+                let device = Device::get(PREFIX)?;
+                eprintln!("path: {}", path.display());
+                eprintln!("device: {}", device.name);
+            }
             Command::Save(args) => {
-                let path = args.path.or_else(get_xdg_path).ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidInput, "could not determine a valid path")
-                })?;
+                let path = get_save_path(args.path.as_ref())?;
                 let device = Device::get(PREFIX)?;
                 let data = DeviceData {
-                    path: device.path.clone(),
+                    path: device.path,
                     brightness: device.brightness,
                 };
                 fs::create_dir_all(&path)?;
                 fs::write(path.join(DATA_FILE_NAME), serde_json::to_string(&data)?)?;
             }
             Command::Restore(args) => {
-                let path = args
-                    .path
-                    .or_else(get_xdg_path)
-                    .ok_or_else(|| {
-                        io::Error::new(
-                            io::ErrorKind::InvalidInput,
-                            "could not determine a valid path",
-                        )
-                    })?
-                    .join(DATA_FILE_NAME);
-
-                let content = fs::read(&path)?;
+                let path = get_save_path(args.path.as_ref())?;
+                let content = fs::read(path.join(DATA_FILE_NAME))?;
                 let data: DeviceData = serde_json::from_slice(&content)?;
                 let mut device = Device::from_path(data.path)?;
                 device.set_brightness(data.brightness)?;
@@ -348,8 +349,13 @@ struct UpdateArgs {
 
 #[derive(Debug, Args)]
 struct SaveArgs {
+    /// Destiny of persistent files.
     #[arg(short, long)]
     path: Option<PathBuf>,
+
+    /// Print default values used without save or restoring.
+    #[arg(long, exclusive = true)]
+    print_defaults: bool,
 }
 
 fn main() -> ExitCode {
