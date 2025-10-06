@@ -59,6 +59,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10d2119f741b79fe9907f5396d19bffcb46568cfcc315e78677d731972ac7085"
 
 [[package]]
+name = "brighter"
+version = "0.1.0"
+dependencies = [
+ "assert_float_eq",
+ "clap",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "clap"
 version = "4.5.48"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -121,16 +131,6 @@ name = "itoa"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c"
-
-[[package]]
-name = "lighter"
-version = "0.1.0"
-dependencies = [
- "assert_float_eq",
- "clap",
- "serde",
- "serde_json",
-]
 
 [[package]]
 name = "memchr"

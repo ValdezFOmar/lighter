@@ -72,6 +72,7 @@ mod percent {
 
 const PREFIX: &str = "/sys/class/backlight";
 const DATA_FILE_NAME: &str = "device-data.json";
+const BIN_NAME: &str = env!("CARGO_BIN_NAME");
 
 type Brightness = u16;
 
@@ -246,7 +247,7 @@ fn get_save_path(default: Option<&PathBuf>) -> io::Result<Cow<'_, Path>> {
             };
 
             if base_path.is_absolute() {
-                Some(Cow::from(base_path.join("lighter")))
+                Some(Cow::from(base_path.join(BIN_NAME)))
             } else {
                 None
             }
