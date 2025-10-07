@@ -129,16 +129,17 @@ impl Device {
         inner(prefix.as_ref())
     }
 
+    fn read_dir(prefix: &str) -> io::Result<impl Iterator<Item = PathBuf>> {
+        Ok(fs::read_dir(prefix)?
+            .filter_map(|entry| entry.inspect_err(|err| eprintln!("{err}")).ok())
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir()))
+    }
+
     /// Returns the first encountered device under the given `prefix`.
     /// Which device is "first" is determined by alphabetical order.
     fn get(prefix: &str) -> io::Result<Self> {
-        let read_dir = fs::read_dir(prefix)?;
-
-        let mut paths = read_dir
-            .filter_map(|entry| entry.inspect_err(|err| eprintln!("{err}")).ok())
-            .map(|entry| entry.path())
-            .filter(|path| path.is_dir())
-            .collect::<Vec<_>>();
+        let mut paths = Self::read_dir(prefix)?.collect::<Vec<_>>();
         paths.sort();
 
         let path = paths
@@ -149,7 +150,7 @@ impl Device {
     }
 
     fn get_all(prefix: &str) -> Vec<Self> {
-        let read_dir = match fs::read_dir(prefix) {
+        let read_dir = match Self::read_dir(prefix) {
             Ok(x) => x,
             Err(err) => {
                 eprintln!("{err}");
@@ -158,9 +159,6 @@ impl Device {
         };
 
         let mut devices = read_dir
-            .filter_map(|entry| entry.inspect_err(|err| eprintln!("{err}")).ok())
-            .map(|entry| entry.path())
-            .filter(|path| path.is_dir())
             .filter_map(|path| {
                 Self::from_path(path)
                     .inspect_err(|err| eprintln!("{err}"))
