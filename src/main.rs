@@ -1,4 +1,4 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::env;
@@ -70,9 +70,11 @@ mod percent {
     }
 }
 
-const PREFIX: &str = "/sys/class/backlight";
-const DATA_FILE_NAME: &str = "device-data.json";
 const BIN_NAME: &str = env!("CARGO_BIN_NAME");
+const DATA_FILE_NAME: &str = "device-data.json";
+
+const LEDS_PREFIX: &str = "/sys/class/leds";
+const BACKLIGHT_PREFIX: &str = "/sys/class/backlight";
 
 type Brightness = u16;
 
@@ -201,6 +203,7 @@ pub fn brightness_to_percent(brightness: Brightness, max_brightness: Brightness)
     Percent::new(percent).expect("percent calculation to always give a valid value")
 }
 
+#[derive(Clone, Copy)]
 enum UpdateAction {
     Add,
     Sub,
@@ -208,7 +211,7 @@ enum UpdateAction {
 }
 
 fn update_brightness(args: &UpdateArgs, action: UpdateAction) -> io::Result<()> {
-    let mut device = Device::get(PREFIX)?;
+    let mut device = Device::get(args.class.prefix())?;
 
     let percent = match action {
         UpdateAction::Add => {
@@ -235,21 +238,19 @@ fn update_brightness(args: &UpdateArgs, action: UpdateAction) -> io::Result<()> 
     Ok(())
 }
 
+fn get_xdg_state_path() -> Option<PathBuf> {
+    env::var_os("XDG_STATE_HOME")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| Some(env::home_dir()?.join(".local/state")))
+        .map(|p| p.join(BIN_NAME))
+}
+
 fn get_save_path(default: Option<&PathBuf>) -> io::Result<Cow<'_, Path>> {
     default
         .map(Cow::from)
-        .or_else(|| {
-            let base_path = match env::var_os("XDG_STATE_HOME") {
-                Some(p) if !p.is_empty() => PathBuf::from(p),
-                _ => env::home_dir()?.join(".local/state"),
-            };
-
-            if base_path.is_absolute() {
-                Some(Cow::from(base_path.join(BIN_NAME)))
-            } else {
-                None
-            }
-        })
+        .or_else(|| Some(Cow::from(get_xdg_state_path()?.join(DATA_FILE_NAME))))
         .ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "could not determine a valid path")
         })
@@ -274,35 +275,43 @@ impl Cli {
             Command::Add(args) => update_brightness(&args, UpdateAction::Add)?,
             Command::Sub(args) => update_brightness(&args, UpdateAction::Sub)?,
             Command::Set(args) => update_brightness(&args, UpdateAction::Set)?,
-            Command::Get => {
-                let device = Device::get(PREFIX)?;
+            Command::Get { class } => {
+                let device = Device::get(class.prefix())?;
                 let percent = brightness_to_percent(device.brightness, device.max_brightness).get();
                 println!("{percent:.2}");
             }
-            Command::Info => {
-                for device in Device::get_all(PREFIX) {
+            Command::Info { class } => {
+                let devices = if let Some(c) = class {
+                    Device::get_all(c.prefix())
+                } else {
+                    let mut ds = Device::get_all(BACKLIGHT_PREFIX);
+                    ds.extend(Device::get_all(LEDS_PREFIX));
+                    ds
+                };
+                for device in devices {
                     println!("{device:#?}");
                 }
             }
-            Command::Save(args) | Command::Restore(args) if args.print_defaults => {
-                let path = get_save_path(None)?;
-                let device = Device::get(PREFIX)?;
-                eprintln!("path: {}", path.display());
-                eprintln!("device: {}", device.name);
-            }
             Command::Save(args) => {
-                let path = get_save_path(args.path.as_ref())?;
-                let device = Device::get(PREFIX)?;
+                let path = get_save_path(args.file.as_ref())?;
+                let device = Device::get(args.class.prefix())?;
+
+                if args.print_defaults {
+                    eprintln!("file = {}", path.display());
+                    eprintln!("device = {}", device.name);
+                    return Ok(());
+                }
+
                 let data = DeviceData {
                     path: device.path,
                     brightness: device.brightness,
                 };
                 fs::create_dir_all(&path)?;
-                fs::write(path.join(DATA_FILE_NAME), serde_json::to_string(&data)?)?;
+                fs::write(path, serde_json::to_string(&data)?)?;
             }
-            Command::Restore(args) => {
-                let path = get_save_path(args.path.as_ref())?;
-                let content = fs::read(path.join(DATA_FILE_NAME))?;
+            Command::Restore { file } => {
+                let path = get_save_path(file.as_ref())?;
+                let content = fs::read(path)?;
                 let data: DeviceData = serde_json::from_slice(&content)?;
                 let mut device = Device::from_path(data.path)?;
                 device.set_brightness(data.brightness)?;
@@ -326,13 +335,46 @@ enum Command {
     /// Set brightness to the given percentage.
     Set(UpdateArgs),
     /// Get current brightness as a percentage.
-    Get,
+    Get {
+        /// Filter by device class
+        #[arg(short, long, value_enum, default_value_t)]
+        class: DeviceClass,
+    },
     /// Get information about backlight devices.
-    Info,
+    Info {
+        /// Filter by device class
+        #[arg(short, long, value_enum)]
+        class: Option<DeviceClass>,
+    },
     /// Save current brightness
     Save(SaveArgs),
     /// Restore brightness (inverse of `save` command)
-    Restore(SaveArgs),
+    Restore {
+        /// File path to restore the brightness from
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum DeviceClass {
+    Leds,
+    Backlight,
+}
+
+impl Default for DeviceClass {
+    fn default() -> Self {
+        Self::Backlight
+    }
+}
+
+impl DeviceClass {
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Leds => LEDS_PREFIX,
+            Self::Backlight => BACKLIGHT_PREFIX,
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -344,13 +386,21 @@ struct UpdateArgs {
     /// Do not modify the brightness, only pretend to do it.
     #[arg(short, long)]
     simulate: bool,
+
+    /// Filter by device class
+    #[arg(short, long, value_enum, default_value_t)]
+    class: DeviceClass,
 }
 
 #[derive(Debug, Args)]
 struct SaveArgs {
     /// Destiny of persistent files.
     #[arg(short, long)]
-    path: Option<PathBuf>,
+    file: Option<PathBuf>,
+
+    /// Filter by device class
+    #[arg(short, long, value_enum, default_value_t)]
+    class: DeviceClass,
 
     /// Print default values used without save or restoring.
     #[arg(long, exclusive = true)]
