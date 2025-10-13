@@ -3,7 +3,23 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum DeviceClass {
+    Leds,
+    Backlight,
+}
+
+impl DeviceClass {
+    pub const fn prefix(self) -> &'static str {
+        match self {
+            Self::Leds => "/sys/class/leds",
+            Self::Backlight => "/sys/class/backlight",
+        }
+    }
+}
 
 pub type Brightness = u16;
 
@@ -64,45 +80,65 @@ impl Device {
 
         inner(prefix.as_ref())
     }
+}
 
-    fn read_dir(prefix: &str) -> io::Result<impl Iterator<Item = PathBuf>> {
-        Ok(fs::read_dir(prefix)?
-            .filter_map(|entry| entry.inspect_err(|err| eprintln!("{err}")).ok())
-            .map(|entry| entry.path())
-            .filter(|path| path.is_dir()))
+#[derive(Default)]
+pub struct DeviceFilters {
+    pub class: Option<DeviceClass>,
+    pub device_name: Option<OsString>,
+}
+
+impl From<crate::FilterArgs> for DeviceFilters {
+    fn from(filter: crate::FilterArgs) -> Self {
+        Self {
+            class: filter.class,
+            device_name: filter.device,
+        }
     }
+}
 
-    /// Returns the first encountered device under the given `prefix`.
-    /// Which device is "first" is determined by alphabetical order.
-    pub fn get(prefix: &str) -> io::Result<Self> {
-        let mut paths = Self::read_dir(prefix)?.collect::<Vec<_>>();
-        paths.sort();
+fn iter_paths(prefix: &str) -> io::Result<impl Iterator<Item = PathBuf>> {
+    Ok(fs::read_dir(prefix)?
+        .filter_map(|entry| entry.inspect_err(|err| eprintln!("{err}")).ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir()))
+}
 
-        let path = paths
-            .first()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no devices found"))?;
+fn iter_devices(filters: &DeviceFilters) -> io::Result<impl Iterator<Item = Device>> {
+    let filter_name = |path: &PathBuf| -> bool {
+        filters
+            .device_name
+            .as_ref()
+            .is_none_or(|name| path.ends_with(name))
+    };
 
-        Self::from_path(path)
-    }
+    let mut paths: Vec<PathBuf> = if let Some(class) = filters.class {
+        iter_paths(class.prefix())?.filter(filter_name).collect()
+    } else {
+        iter_paths(DeviceClass::Backlight.prefix())?
+            .chain(iter_paths(DeviceClass::Leds.prefix())?)
+            .filter(filter_name)
+            .collect()
+    };
 
-    pub fn get_all(prefix: &str) -> Vec<Self> {
-        let read_dir = match Self::read_dir(prefix) {
-            Ok(x) => x,
-            Err(err) => {
-                eprintln!("{err}");
-                return Vec::new();
-            }
-        };
+    paths.sort();
 
-        let mut devices = read_dir
-            .filter_map(|path| {
-                Self::from_path(path)
-                    .inspect_err(|err| eprintln!("{err}"))
-                    .ok()
-            })
-            .collect::<Vec<_>>();
+    Ok(paths.into_iter().filter_map(|path| {
+        Device::from_path(&path)
+            .inspect_err(|err| eprintln!("{err}: {}", path.display()))
+            .ok()
+    }))
+}
 
-        devices.sort_by(|dev1, dev2| dev1.name.cmp(&dev2.name));
-        devices
-    }
+/// Returns all devices matching the given filters.
+pub fn get_devices(filters: &DeviceFilters) -> io::Result<Vec<Device>> {
+    iter_devices(filters).map(|iter| iter.collect())
+}
+
+/// Returns the first encountered device matching the given filters.
+/// Which device is "first" is determined by alphabetical order.
+pub fn get_device(filters: &DeviceFilters) -> io::Result<Device> {
+    iter_devices(filters)?
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no devices found"))
 }

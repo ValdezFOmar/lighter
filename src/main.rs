@@ -1,4 +1,4 @@
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand};
 use std::borrow::Cow;
 use std::env;
 use std::ffi::OsString;
@@ -7,7 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use crate::device::{Device, DeviceData, Brightness};
+use crate::device::{Brightness, Device, DeviceClass, DeviceData};
 use crate::percent::Percent;
 
 mod device;
@@ -72,9 +72,6 @@ mod percent {
 const BIN_NAME: &str = env!("CARGO_BIN_NAME");
 const DATA_FILE_NAME: &str = "device-data.json";
 
-const LEDS_PREFIX: &str = "/sys/class/leds";
-const BACKLIGHT_PREFIX: &str = "/sys/class/backlight";
-
 /// Convert to a brightness value relative to a maximum brightness.
 /// The conversion adjusts the value in accordance to [human perception][perception].
 ///
@@ -112,8 +109,8 @@ enum UpdateAction {
     Set,
 }
 
-fn update_brightness(args: &UpdateArgs, action: UpdateAction) -> io::Result<()> {
-    let mut device = Device::get(args.class.prefix())?;
+fn update_brightness(args: UpdateArgs, action: UpdateAction) -> io::Result<()> {
+    let mut device = device::get_device(&args.filters.into())?;
 
     let percent = match action {
         UpdateAction::Add => {
@@ -158,28 +155,18 @@ fn get_save_path(default: Option<&PathBuf>) -> io::Result<Cow<'_, Path>> {
         })
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum DeviceClass {
-    Leds,
-    Backlight,
+#[derive(Args)]
+struct FilterArgs {
+    /// Filter by device class
+    #[arg(short, long, value_enum)]
+    class: Option<DeviceClass>,
+
+    /// Filter by device name
+    #[arg(short, long)]
+    device: Option<OsString>,
 }
 
-impl Default for DeviceClass {
-    fn default() -> Self {
-        Self::Backlight
-    }
-}
-
-impl DeviceClass {
-    fn prefix(self) -> &'static str {
-        match self {
-            Self::Leds => LEDS_PREFIX,
-            Self::Backlight => BACKLIGHT_PREFIX,
-        }
-    }
-}
-
-#[derive(Debug, Args)]
+#[derive(Args)]
 struct UpdateArgs {
     /// Value in the range [0, 100], supports decimals (e.g. 10.5).
     #[arg(value_parser = percent::clap_parser)]
@@ -189,31 +176,25 @@ struct UpdateArgs {
     #[arg(short, long)]
     simulate: bool,
 
-    /// Filter by device class
-    #[arg(short, long, value_enum, default_value_t)]
-    class: DeviceClass,
-
-    /// Filter by device name
-    #[arg(short, long)]
-    device: Option<OsString>,
+    #[command(flatten)]
+    filters: FilterArgs,
 }
 
-#[derive(Debug, Args)]
+#[derive(Args)]
 struct SaveArgs {
     /// Destiny of persistent files.
     #[arg(short, long)]
     file: Option<PathBuf>,
 
-    /// Filter by device class
-    #[arg(short, long, value_enum, default_value_t)]
-    class: DeviceClass,
+    #[command(flatten)]
+    filters: FilterArgs,
 
     /// Print default values used without save or restoring.
     #[arg(long, exclusive = true)]
     print_defaults: bool,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Subcommand)]
 enum Command {
     /// Increment brightness by the given percentage.
     Add(UpdateArgs),
@@ -222,17 +203,9 @@ enum Command {
     /// Set brightness to the given percentage.
     Set(UpdateArgs),
     /// Get current brightness as a percentage.
-    Get {
-        /// Filter by device class
-        #[arg(short, long, value_enum, default_value_t)]
-        class: DeviceClass,
-    },
+    Get(FilterArgs),
     /// Get information about backlight devices.
-    Info {
-        /// Filter by device class
-        #[arg(short, long, value_enum)]
-        class: Option<DeviceClass>,
-    },
+    Info(FilterArgs),
     /// Save current brightness
     Save(SaveArgs),
     /// Restore brightness (inverse of `save` command)
@@ -243,7 +216,7 @@ enum Command {
     },
 }
 
-#[derive(Debug, Parser)]
+#[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
@@ -253,29 +226,29 @@ struct Cli {
 impl Cli {
     fn run(self) -> Result<(), Box<dyn core::error::Error>> {
         match self.command {
-            Command::Add(args) => update_brightness(&args, UpdateAction::Add)?,
-            Command::Sub(args) => update_brightness(&args, UpdateAction::Sub)?,
-            Command::Set(args) => update_brightness(&args, UpdateAction::Set)?,
-            Command::Get { class } => {
-                let device = Device::get(class.prefix())?;
+            Command::Add(args) => update_brightness(args, UpdateAction::Add)?,
+            Command::Sub(args) => update_brightness(args, UpdateAction::Sub)?,
+            Command::Set(args) => update_brightness(args, UpdateAction::Set)?,
+            Command::Get(filters) => {
+                let device = device::get_device(&filters.into())?;
                 let percent = brightness_to_percent(device.brightness, device.max_brightness).get();
                 println!("{percent:.2}");
             }
-            Command::Info { class } => {
-                let devices = if let Some(c) = class {
-                    Device::get_all(c.prefix())
-                } else {
-                    let mut ds = Device::get_all(BACKLIGHT_PREFIX);
-                    ds.extend(Device::get_all(LEDS_PREFIX));
-                    ds
-                };
+            Command::Info(filters) => {
+                let devices = device::get_devices(&filters.into())?;
                 for device in devices {
-                    println!("{device:#?}");
+                    println!(
+                        "{}\n\tpath = {}\n\tbrightness = {}\n\tmax_brightness = {}",
+                        device.name.display(),
+                        device.path.display(),
+                        device.brightness,
+                        device.max_brightness
+                    );
                 }
             }
             Command::Save(args) => {
                 let path = get_save_path(args.file.as_ref())?;
-                let device = Device::get(args.class.prefix())?;
+                let device = device::get_device(&args.filters.into())?;
 
                 if args.print_defaults {
                     eprintln!("file = {}", path.display());
