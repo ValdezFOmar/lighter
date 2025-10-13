@@ -1,14 +1,16 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use crate::device::{Device, DeviceData, Brightness};
 use crate::percent::Percent;
 
+mod device;
 mod percent {
     use core::ops::{Add, Sub};
 
@@ -49,10 +51,7 @@ mod percent {
         let percent: f32 = s
             .parse()
             .map_err(|_| format!("`{s}` is not a percentage"))?;
-        match Percent::new(percent) {
-            Some(p) => Ok(p),
-            None => Err(format!("`{s}` is not a percentage between 0 and 100")),
-        }
+        Percent::new(percent).ok_or_else(|| format!("`{s}` is not a percentage between 0 and 100"))
     }
 
     #[test]
@@ -75,103 +74,6 @@ const DATA_FILE_NAME: &str = "device-data.json";
 
 const LEDS_PREFIX: &str = "/sys/class/leds";
 const BACKLIGHT_PREFIX: &str = "/sys/class/backlight";
-
-type Brightness = u16;
-
-#[derive(Debug, Clone)]
-struct Device {
-    /// Device name, derived from its path.
-    name: String,
-    /// Full path to the device, including its name.
-    path: PathBuf,
-    brightness: Brightness,
-    max_brightness: Brightness,
-}
-
-impl Device {
-    fn set_brightness(&mut self, value: Brightness) -> io::Result<()> {
-        let path = self.path.join("brightness");
-        let brightness = value.min(self.max_brightness);
-        fs::write(path, brightness.to_string())?;
-        self.brightness = brightness;
-        Ok(())
-    }
-
-    fn from_path(prefix: impl AsRef<Path>) -> io::Result<Self> {
-        fn parse_brightness(path: &Path) -> io::Result<Brightness> {
-            fs::read_to_string(path)?
-                .trim()
-                .parse()
-                .map_err(io::Error::other)
-        }
-
-        fn inner(prefix: &Path) -> io::Result<Device> {
-            let name = prefix
-                .file_name()
-                .ok_or_else(|| io::Error::other(format!("{prefix:#?} has no file name")))?
-                .to_string_lossy()
-                .to_string();
-
-            let brightness = parse_brightness(&prefix.join("brightness"))?;
-            let max_brightness = parse_brightness(&prefix.join("max_brightness"))?;
-
-            assert!(
-                brightness <= max_brightness,
-                "brightness = {brightness} > max_brightness = {max_brightness}"
-            );
-
-            Ok(Device {
-                name,
-                brightness,
-                max_brightness,
-                path: prefix.to_path_buf(),
-            })
-        }
-
-        inner(prefix.as_ref())
-    }
-
-    fn read_dir(prefix: &str) -> io::Result<impl Iterator<Item = PathBuf>> {
-        Ok(fs::read_dir(prefix)?
-            .filter_map(|entry| entry.inspect_err(|err| eprintln!("{err}")).ok())
-            .map(|entry| entry.path())
-            .filter(|path| path.is_dir()))
-    }
-
-    /// Returns the first encountered device under the given `prefix`.
-    /// Which device is "first" is determined by alphabetical order.
-    fn get(prefix: &str) -> io::Result<Self> {
-        let mut paths = Self::read_dir(prefix)?.collect::<Vec<_>>();
-        paths.sort();
-
-        let path = paths
-            .first()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no devices found"))?;
-
-        Self::from_path(path)
-    }
-
-    fn get_all(prefix: &str) -> Vec<Self> {
-        let read_dir = match Self::read_dir(prefix) {
-            Ok(x) => x,
-            Err(err) => {
-                eprintln!("{err}");
-                return Vec::new();
-            }
-        };
-
-        let mut devices = read_dir
-            .filter_map(|path| {
-                Self::from_path(path)
-                    .inspect_err(|err| eprintln!("{err}"))
-                    .ok()
-            })
-            .collect::<Vec<_>>();
-
-        devices.sort_by(|dev1, dev2| dev1.name.cmp(&dev2.name));
-        devices
-    }
-}
 
 /// Convert to a brightness value relative to a maximum brightness.
 /// The conversion adjusts the value in accordance to [human perception][perception].
@@ -256,10 +158,89 @@ fn get_save_path(default: Option<&PathBuf>) -> io::Result<Cow<'_, Path>> {
         })
 }
 
-#[derive(Serialize, Deserialize)]
-struct DeviceData {
-    path: PathBuf,
-    brightness: Brightness,
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum DeviceClass {
+    Leds,
+    Backlight,
+}
+
+impl Default for DeviceClass {
+    fn default() -> Self {
+        Self::Backlight
+    }
+}
+
+impl DeviceClass {
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Leds => LEDS_PREFIX,
+            Self::Backlight => BACKLIGHT_PREFIX,
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+struct UpdateArgs {
+    /// Value in the range [0, 100], supports decimals (e.g. 10.5).
+    #[arg(value_parser = percent::clap_parser)]
+    percent: Percent,
+
+    /// Do not modify the brightness, only pretend to do it.
+    #[arg(short, long)]
+    simulate: bool,
+
+    /// Filter by device class
+    #[arg(short, long, value_enum, default_value_t)]
+    class: DeviceClass,
+
+    /// Filter by device name
+    #[arg(short, long)]
+    device: Option<OsString>,
+}
+
+#[derive(Debug, Args)]
+struct SaveArgs {
+    /// Destiny of persistent files.
+    #[arg(short, long)]
+    file: Option<PathBuf>,
+
+    /// Filter by device class
+    #[arg(short, long, value_enum, default_value_t)]
+    class: DeviceClass,
+
+    /// Print default values used without save or restoring.
+    #[arg(long, exclusive = true)]
+    print_defaults: bool,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Increment brightness by the given percentage.
+    Add(UpdateArgs),
+    /// Decrease brightness by the given percentage.
+    Sub(UpdateArgs),
+    /// Set brightness to the given percentage.
+    Set(UpdateArgs),
+    /// Get current brightness as a percentage.
+    Get {
+        /// Filter by device class
+        #[arg(short, long, value_enum, default_value_t)]
+        class: DeviceClass,
+    },
+    /// Get information about backlight devices.
+    Info {
+        /// Filter by device class
+        #[arg(short, long, value_enum)]
+        class: Option<DeviceClass>,
+    },
+    /// Save current brightness
+    Save(SaveArgs),
+    /// Restore brightness (inverse of `save` command)
+    Restore {
+        /// File path to restore the brightness from
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -298,7 +279,7 @@ impl Cli {
 
                 if args.print_defaults {
                     eprintln!("file = {}", path.display());
-                    eprintln!("device = {}", device.name);
+                    eprintln!("device = {}", device.name.display());
                     return Ok(());
                 }
 
@@ -317,94 +298,14 @@ impl Cli {
                 device.set_brightness(data.brightness)?;
                 println!(
                     r#"restored device "{}" with brightness: {}"#,
-                    device.name, device.brightness
+                    device.name.display(),
+                    device.brightness
                 );
             }
         }
 
         Ok(())
     }
-}
-
-#[derive(Debug, Subcommand)]
-enum Command {
-    /// Increment brightness by the given percentage.
-    Add(UpdateArgs),
-    /// Decrease brightness by the given percentage.
-    Sub(UpdateArgs),
-    /// Set brightness to the given percentage.
-    Set(UpdateArgs),
-    /// Get current brightness as a percentage.
-    Get {
-        /// Filter by device class
-        #[arg(short, long, value_enum, default_value_t)]
-        class: DeviceClass,
-    },
-    /// Get information about backlight devices.
-    Info {
-        /// Filter by device class
-        #[arg(short, long, value_enum)]
-        class: Option<DeviceClass>,
-    },
-    /// Save current brightness
-    Save(SaveArgs),
-    /// Restore brightness (inverse of `save` command)
-    Restore {
-        /// File path to restore the brightness from
-        #[arg(short, long)]
-        file: Option<PathBuf>,
-    },
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum DeviceClass {
-    Leds,
-    Backlight,
-}
-
-impl Default for DeviceClass {
-    fn default() -> Self {
-        Self::Backlight
-    }
-}
-
-impl DeviceClass {
-    fn prefix(self) -> &'static str {
-        match self {
-            Self::Leds => LEDS_PREFIX,
-            Self::Backlight => BACKLIGHT_PREFIX,
-        }
-    }
-}
-
-#[derive(Debug, Args)]
-struct UpdateArgs {
-    /// Value in the range [0, 100], supports decimals (e.g. 10.5).
-    #[arg(value_parser = percent::clap_parser)]
-    percent: Percent,
-
-    /// Do not modify the brightness, only pretend to do it.
-    #[arg(short, long)]
-    simulate: bool,
-
-    /// Filter by device class
-    #[arg(short, long, value_enum, default_value_t)]
-    class: DeviceClass,
-}
-
-#[derive(Debug, Args)]
-struct SaveArgs {
-    /// Destiny of persistent files.
-    #[arg(short, long)]
-    file: Option<PathBuf>,
-
-    /// Filter by device class
-    #[arg(short, long, value_enum, default_value_t)]
-    class: DeviceClass,
-
-    /// Print default values used without save or restoring.
-    #[arg(long, exclusive = true)]
-    print_defaults: bool,
 }
 
 fn main() -> ExitCode {
