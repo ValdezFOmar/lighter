@@ -1,10 +1,9 @@
 use clap::{Args, Parser, Subcommand};
-use std::borrow::Cow;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use crate::device::{Brightness, Device, DeviceClass, DeviceData};
@@ -146,13 +145,32 @@ fn get_xdg_state_path() -> Option<PathBuf> {
         .map(|p| p.join(BIN_NAME))
 }
 
-fn get_save_path(default: Option<&PathBuf>) -> io::Result<Cow<'_, Path>> {
+type FilePath = (PathBuf, OsString);
+
+fn get_save_path(default: Option<FilePath>) -> io::Result<FilePath> {
     default
-        .map(Cow::from)
-        .or_else(|| Some(Cow::from(get_xdg_state_path()?.join(DATA_FILE_NAME))))
+        .or_else(|| Some((get_xdg_state_path()?, DATA_FILE_NAME.into())))
         .ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "could not determine a valid path")
         })
+}
+
+fn validate_file_path(opt: &str) -> Result<FilePath, String> {
+    if opt.ends_with('/') {
+        return Err(format!("\"{opt}\" must a path to a file, not a directory"));
+    }
+
+    let path = PathBuf::from(opt);
+    let base = path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(""));
+    let name = path
+        .file_name()
+        .ok_or_else(|| format!("\"{opt}\" has no file name"))?
+        .to_os_string();
+
+    Ok((base, name))
 }
 
 #[derive(Args)]
@@ -183,14 +201,14 @@ struct UpdateArgs {
 #[derive(Args)]
 struct SaveArgs {
     /// Destiny of persistent files.
-    #[arg(short, long)]
-    file: Option<PathBuf>,
+    #[arg(short, long, value_parser=validate_file_path)]
+    file: Option<FilePath>,
 
     #[command(flatten)]
     filters: FilterArgs,
 
-    /// Print default values used without save or restoring.
-    #[arg(long, exclusive = true)]
+    /// Print default values used without saving.
+    #[arg(long)]
     print_defaults: bool,
 }
 
@@ -211,8 +229,8 @@ enum Command {
     /// Restore brightness (inverse of `save` command)
     Restore {
         /// File path to restore the brightness from
-        #[arg(short, long)]
-        file: Option<PathBuf>,
+        #[arg(short, long, value_parser=validate_file_path)]
+        file: Option<FilePath>,
     },
 }
 
@@ -247,11 +265,12 @@ impl Cli {
                 }
             }
             Command::Save(args) => {
-                let path = get_save_path(args.file.as_ref())?;
+                let (base_path, name) = get_save_path(args.file)?;
+                let file_path = base_path.join(name);
                 let device = device::get_device(&args.filters.into())?;
 
                 if args.print_defaults {
-                    eprintln!("file = {}", path.display());
+                    eprintln!("file = {}", file_path.display());
                     eprintln!("device = {}", device.name.display());
                     return Ok(());
                 }
@@ -260,11 +279,14 @@ impl Cli {
                     path: device.path,
                     brightness: device.brightness,
                 };
-                fs::create_dir_all(&path)?;
-                fs::write(path, serde_json::to_string(&data)?)?;
+                fs::create_dir_all(&base_path)?;
+                fs::write(file_path, serde_json::to_string(&data)?)?;
             }
             Command::Restore { file } => {
-                let path = get_save_path(file.as_ref())?;
+                let path = {
+                    let (base, name) = get_save_path(file)?;
+                    base.join(name)
+                };
                 let content = fs::read(path)?;
                 let data: DeviceData = serde_json::from_slice(&content)?;
                 let mut device = Device::from_path(data.path)?;
