@@ -59,7 +59,7 @@ impl Device {
         fn inner(prefix: &Path) -> io::Result<Device> {
             let name = prefix
                 .file_name()
-                .ok_or_else(|| io::Error::other(format!("{prefix:#?} has no file name")))?
+                .ok_or_else(|| io::Error::other(format!("{} has no file name", prefix.display())))?
                 .to_os_string();
 
             let brightness = parse_brightness(&prefix.join("brightness"))?;

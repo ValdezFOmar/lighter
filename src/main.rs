@@ -163,8 +163,7 @@ fn validate_file_path(opt: &str) -> Result<FilePath, String> {
     let path = PathBuf::from(opt);
     let base = path
         .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| PathBuf::from(""));
+        .map_or_else(|| PathBuf::from(""), PathBuf::from);
     let name = path
         .file_name()
         .ok_or_else(|| format!("\"{opt}\" has no file name"))?
