@@ -1,4 +1,3 @@
-use clap::{Args, Parser, Subcommand};
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -6,10 +5,34 @@ use std::io;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use clap::{Args, Parser, Subcommand};
+
 use crate::device::{Brightness, Device, DeviceClass, DeviceData};
 use crate::percent::Percent;
 
 mod device;
+
+mod logger {
+    use crate::BIN_NAME;
+    use log::{Level, Metadata, Record};
+
+    pub struct Logger;
+
+    impl log::Log for Logger {
+        fn enabled(&self, metadata: &Metadata) -> bool {
+            metadata.level() <= Level::Debug
+        }
+
+        fn log(&self, record: &Record) {
+            if self.enabled(record.metadata()) {
+                eprintln!("{BIN_NAME}: {}: {}", record.level(), record.args());
+            }
+        }
+
+        fn flush(&self) {}
+    }
+}
+
 mod percent {
     use core::ops::{Add, Sub};
 
@@ -69,7 +92,6 @@ mod percent {
 }
 
 const BIN_NAME: &str = env!("CARGO_BIN_NAME");
-const DATA_FILE_NAME: &str = "device-data.json";
 
 /// Convert to a brightness value relative to a maximum brightness.
 /// The conversion adjusts the value in accordance to [human perception][perception].
@@ -148,6 +170,7 @@ fn get_xdg_state_path() -> Option<PathBuf> {
 type FilePath = (PathBuf, OsString);
 
 fn get_save_path(default: Option<FilePath>) -> io::Result<FilePath> {
+    const DATA_FILE_NAME: &str = "device-data.json";
     default
         .or_else(|| Some((get_xdg_state_path()?, DATA_FILE_NAME.into())))
         .ok_or_else(|| {
@@ -200,7 +223,7 @@ struct UpdateArgs {
 #[derive(Args)]
 struct SaveArgs {
     /// Destiny of persistent files.
-    #[arg(short, long, value_parser=validate_file_path)]
+    #[arg(short, long, value_parser = validate_file_path)]
     file: Option<FilePath>,
 
     #[command(flatten)]
@@ -238,9 +261,21 @@ enum Command {
 struct Cli {
     #[command(subcommand)]
     command: Command,
+
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    verbose: u8,
 }
 
 impl Cli {
+    fn log_level(&self) -> log::LevelFilter {
+        match self.verbose {
+            0 => log::LevelFilter::Error,
+            1 => log::LevelFilter::Warn,
+            2 => log::LevelFilter::Info,
+            _ => log::LevelFilter::Debug,
+        }
+    }
+
     fn run(self) -> Result<(), Box<dyn core::error::Error>> {
         match self.command {
             Command::Add(args) => update_brightness(args, UpdateAction::Add)?,
@@ -269,8 +304,8 @@ impl Cli {
                 let device = device::get_device(&args.filters.into())?;
 
                 if args.print_defaults {
-                    eprintln!("file = {}", file_path.display());
-                    eprintln!("device = {}", device.name.display());
+                    println!("file = {}", file_path.display());
+                    println!("device = {}", device.name.display());
                     return Ok(());
                 }
 
@@ -290,7 +325,7 @@ impl Cli {
                 let data: DeviceData = serde_json::from_slice(&content)?;
                 let mut device = Device::from_path(data.path)?;
                 device.set_brightness(data.brightness)?;
-                println!(
+                log::info!(
                     r#"restored device "{}" with brightness: {}"#,
                     device.name.display(),
                     device.brightness
@@ -304,8 +339,11 @@ impl Cli {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    log::set_logger(&logger::Logger).expect("setting logger");
+    log::set_max_level(cli.log_level());
+
     if let Err(err) = cli.run() {
-        eprintln!("{err}");
+        log::error!("{err}");
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS

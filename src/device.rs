@@ -49,14 +49,9 @@ impl Device {
     }
 
     pub fn from_path(prefix: impl AsRef<Path>) -> io::Result<Self> {
-        fn parse_brightness(path: &Path) -> io::Result<Brightness> {
-            fs::read_to_string(path)?
-                .trim()
-                .parse()
-                .map_err(io::Error::other)
-        }
-
         fn inner(prefix: &Path) -> io::Result<Device> {
+            log::debug!("creating device from path: {}", prefix.display());
+
             let name = prefix
                 .file_name()
                 .ok_or_else(|| io::Error::other(format!("{} has no file name", prefix.display())))?
@@ -77,9 +72,15 @@ impl Device {
                 path: prefix.to_path_buf(),
             })
         }
-
         inner(prefix.as_ref())
     }
+}
+
+fn parse_brightness(path: &Path) -> io::Result<Brightness> {
+    fs::read_to_string(path)?
+        .trim()
+        .parse()
+        .map_err(io::Error::other)
 }
 
 #[derive(Default)]
@@ -89,6 +90,7 @@ pub struct DeviceFilters {
 }
 
 impl From<crate::FilterArgs> for DeviceFilters {
+    #[inline]
     fn from(filter: crate::FilterArgs) -> Self {
         Self {
             class: filter.class,
@@ -99,7 +101,7 @@ impl From<crate::FilterArgs> for DeviceFilters {
 
 fn iter_paths(prefix: &str) -> io::Result<impl Iterator<Item = PathBuf>> {
     Ok(fs::read_dir(prefix)?
-        .filter_map(|entry| entry.inspect_err(|err| eprintln!("{err}")).ok())
+        .filter_map(|entry| entry.inspect_err(|err| log::warn!("{err}")).ok())
         .map(|entry| entry.path())
         .filter(|path| path.is_dir()))
 }
@@ -125,7 +127,7 @@ fn iter_devices(filters: &DeviceFilters) -> io::Result<impl Iterator<Item = Devi
 
     Ok(paths.into_iter().filter_map(|path| {
         Device::from_path(&path)
-            .inspect_err(|err| eprintln!("{err}: {}", path.display()))
+            .inspect_err(|err| log::warn!("{err}: {}", path.display()))
             .ok()
     }))
 }
