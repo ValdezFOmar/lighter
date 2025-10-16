@@ -132,9 +132,24 @@ fn iter_devices(filters: &DeviceFilters) -> io::Result<impl Iterator<Item = Devi
     }))
 }
 
+fn not_found_err(filters: &DeviceFilters) -> io::Error {
+    let msg = if let Some(name) = &filters.device_name {
+        format!("device with name \"{}\" not found", name.display())
+    } else {
+        "no devices found".to_string()
+    };
+
+    io::Error::new(io::ErrorKind::NotFound, msg)
+}
+
 /// Returns all devices matching the given filters.
-pub fn get_devices(filters: &DeviceFilters) -> io::Result<Vec<Device>> {
-    iter_devices(filters).map(|iter| iter.collect())
+pub fn get_devices(filters: &DeviceFilters) -> io::Result<impl Iterator<Item = Device>> {
+    let mut iter = iter_devices(filters)?.peekable();
+    if iter.peek().is_some() {
+        Ok(iter)
+    } else {
+        Err(not_found_err(filters))
+    }
 }
 
 /// Returns the first encountered device matching the given filters.
@@ -142,5 +157,5 @@ pub fn get_devices(filters: &DeviceFilters) -> io::Result<Vec<Device>> {
 pub fn get_device(filters: &DeviceFilters) -> io::Result<Device> {
     iter_devices(filters)?
         .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no devices found"))
+        .ok_or_else(|| not_found_err(filters))
 }

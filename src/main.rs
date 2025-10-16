@@ -287,8 +287,8 @@ impl Cli {
                 println!("{percent:.2}");
             }
             Command::Info(filters) => {
-                let devices = device::get_devices(&filters.into())?;
-                for device in devices {
+                let filters = filters.into();
+                for device in device::get_devices(&filters)? {
                     println!(
                         "{}\n\tpath = {}\n\tbrightness = {}\n\tmax_brightness = {}",
                         device.name.display(),
