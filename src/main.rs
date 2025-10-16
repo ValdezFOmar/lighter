@@ -290,9 +290,10 @@ impl Cli {
                 let filters = filters.into();
                 for device in device::get_devices(&filters)? {
                     println!(
-                        "{}\n\tpath = {}\n\tbrightness = {}\n\tmax_brightness = {}",
+                        "{}\n\tpath = {}\n\tclass = {}\n\tbrightness = {}\n\tmax_brightness = {}",
                         device.name.display(),
                         device.path.display(),
+                        device.class,
                         device.brightness,
                         device.max_brightness
                     );

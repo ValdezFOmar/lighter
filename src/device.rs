@@ -1,4 +1,5 @@
 use std::ffi::OsString;
+use std::fmt::Display;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -13,10 +14,19 @@ pub enum DeviceClass {
 }
 
 impl DeviceClass {
-    pub const fn prefix(self) -> &'static str {
+    const fn prefix(self) -> &'static str {
         match self {
             Self::Leds => "/sys/class/leds",
             Self::Backlight => "/sys/class/backlight",
+        }
+    }
+}
+
+impl Display for DeviceClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DeviceClass::Leds => write!(f, "leds"),
+            DeviceClass::Backlight => write!(f, "backlight"),
         }
     }
 }
@@ -35,6 +45,7 @@ pub struct Device {
     pub name: OsString,
     /// Full path to the device, including its name.
     pub path: PathBuf,
+    pub class: DeviceClass,
     pub brightness: Brightness,
     pub max_brightness: Brightness,
 }
@@ -65,8 +76,18 @@ impl Device {
                 "brightness = {brightness} > max_brightness = {max_brightness}"
             );
 
+            let class = match prefix
+                .parent()
+                .and_then(|path| path.file_name())
+                .and_then(|name| name.to_str())
+            {
+                Some("leds") => DeviceClass::Leds,
+                _ => DeviceClass::Backlight,
+            };
+
             Ok(Device {
                 name,
+                class,
                 brightness,
                 max_brightness,
                 path: prefix.to_path_buf(),
