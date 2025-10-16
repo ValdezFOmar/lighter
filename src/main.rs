@@ -133,24 +133,17 @@ enum UpdateAction {
 fn update_brightness(args: UpdateArgs, action: UpdateAction) -> io::Result<()> {
     let mut device = device::get_device(&args.filters.into())?;
 
+    use UpdateAction as UA;
     let percent = match action {
-        UpdateAction::Add => {
-            brightness_to_percent(device.brightness, device.max_brightness) + args.percent
-        }
-        UpdateAction::Sub => {
-            brightness_to_percent(device.brightness, device.max_brightness) - args.percent
-        }
-        UpdateAction::Set => args.percent,
+        UA::Add => brightness_to_percent(device.brightness, device.max_brightness) + args.percent,
+        UA::Sub => brightness_to_percent(device.brightness, device.max_brightness) - args.percent,
+        UA::Set => args.percent,
     };
     let brightness = brightness_from_percent(&percent, device.max_brightness);
 
-    let brightness = if args.simulate {
-        Ok(brightness)
-    } else {
-        device
-            .set_brightness(brightness)
-            .map(|()| device.brightness)
-    }?;
+    if !args.simulate {
+        device.set_brightness(brightness)?;
+    }
 
     let percent = brightness_to_percent(brightness, device.max_brightness).get();
     println!("{percent:.2}");
