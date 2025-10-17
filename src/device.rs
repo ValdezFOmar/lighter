@@ -34,9 +34,18 @@ impl Display for DeviceClass {
 pub type Brightness = u16;
 
 #[derive(Serialize, Deserialize)]
-pub struct DeviceData {
+pub struct SaveData {
     pub path: PathBuf,
     pub brightness: Brightness,
+}
+
+impl From<Device> for SaveData {
+    fn from(device: Device) -> Self {
+        Self {
+            path: device.path,
+            brightness: device.brightness,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

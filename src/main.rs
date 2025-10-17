@@ -1,5 +1,5 @@
 use std::env;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -7,7 +7,7 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 
-use crate::device::{Brightness, Device, DeviceClass, DeviceData};
+use crate::device::{Brightness, Device, DeviceClass, SaveData};
 use crate::percent::Percent;
 
 mod device;
@@ -292,38 +292,72 @@ impl Cli {
                     );
                 }
             }
-            Command::Save(args) => {
+            Command::Save(mut args) => {
+                // Save all backlight devices by default if no filters were provided,
+                // on the belief that this would be the common usage.
+                if args.filters.class.is_none() && args.filters.device.is_none() {
+                    args.filters.class = Some(DeviceClass::Backlight);
+                }
+
                 let (base_path, name) = get_save_path(args.file)?;
                 let file_path = base_path.join(name);
-                let device = device::get_device(&args.filters.into())?;
+                let filters = args.filters.into();
+                let devices = device::get_devices(&filters)?;
 
                 if args.print_defaults {
+                    let devices = devices
+                        .map(|dev| dev.name)
+                        .collect::<Vec<_>>()
+                        .join(OsStr::new(", "));
                     println!("file = {}", file_path.display());
-                    println!("device = {}", device.name.display());
+                    println!("device(s) = {}", devices.display());
                     return Ok(());
                 }
 
-                let data = DeviceData {
-                    path: device.path,
-                    brightness: device.brightness,
-                };
+                let data: Vec<_> = devices.map(SaveData::from).collect();
                 fs::create_dir_all(&base_path)?;
-                fs::write(file_path, serde_json::to_string(&data)?)?;
+                fs::write(file_path, serde_json::to_string_pretty(&data)?)?;
             }
             Command::Restore { file } => {
                 let path = {
                     let (base, name) = get_save_path(file)?;
                     base.join(name)
                 };
+
                 let content = fs::read(path)?;
-                let data: DeviceData = serde_json::from_slice(&content)?;
-                let mut device = Device::from_path(data.path)?;
-                device.set_brightness(data.brightness)?;
-                log::info!(
-                    r#"restored device "{}" with brightness: {}"#,
-                    device.name.display(),
-                    device.brightness
-                );
+                let save_data: Vec<SaveData> = serde_json::from_slice(&content)?;
+                let mut fail_to_restore = false;
+
+                // Explicitly handle all errors to allow restoring as much devices as possible.
+                for data in save_data {
+                    match Device::from_path(data.path) {
+                        Ok(mut device) => {
+                            if let Err(err) = device.set_brightness(data.brightness) {
+                                fail_to_restore = true;
+                                log::error!(
+                                    r#"failed to set brightness for device "{}": {err}"#,
+                                    device.name.display()
+                                );
+                            } else {
+                                log::info!(
+                                    r#"restored device "{}" with brightness: {}"#,
+                                    device.name.display(),
+                                    device.brightness
+                                );
+                            }
+                        }
+                        Err(err) => {
+                            fail_to_restore = true;
+                            log::error!("{err}");
+                        }
+                    }
+                }
+
+                if fail_to_restore {
+                    // Extra error to allow main to return with non-zero status code
+                    // in case any errors happened while trying to restore any device.
+                    return Err(io::Error::other("failed to restore some devices").into());
+                }
             }
         }
 
