@@ -5,7 +5,8 @@ use std::io;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use serde::Serialize;
 
 use crate::device::{Brightness, Device, DeviceClass, SaveData};
 use crate::percent::Percent;
@@ -187,6 +188,27 @@ fn validate_file_path(opt: &str) -> Result<FilePath, String> {
 
     Ok((base, name))
 }
+#[derive(Serialize)]
+struct DeviceOutput {
+    name: String,
+    path: PathBuf,
+    class: DeviceClass,
+    brightness: Brightness,
+    max_brightness: Brightness,
+}
+
+impl From<Device> for DeviceOutput {
+    #[inline]
+    fn from(device: Device) -> Self {
+        Self {
+            name: device.name.to_string_lossy().to_string(),
+            path: device.path,
+            class: device.class,
+            brightness: device.brightness,
+            max_brightness: device.max_brightness,
+        }
+    }
+}
 
 #[derive(Args)]
 struct FilterArgs {
@@ -208,6 +230,25 @@ struct UpdateArgs {
     /// Do not modify the brightness, only pretend to do it.
     #[arg(short, long)]
     simulate: bool,
+
+    #[command(flatten)]
+    filters: FilterArgs,
+}
+
+#[derive(Copy, Clone, Default, ValueEnum)]
+enum OutputFormat {
+    #[default]
+    Plain,
+    Json,
+    JsonLines,
+    CSV,
+}
+
+#[derive(Args)]
+struct InfoArgs {
+    /// Output format for devices
+    #[arg(short, long, value_enum, default_value_t)]
+    format: OutputFormat,
 
     #[command(flatten)]
     filters: FilterArgs,
@@ -238,7 +279,7 @@ enum Command {
     /// Get current brightness as a percentage.
     Get(FilterArgs),
     /// Get information about backlight devices.
-    Info(FilterArgs),
+    Info(InfoArgs),
     /// Save current brightness
     Save(SaveArgs),
     /// Restore brightness (inverse of `save` command)
@@ -279,17 +320,47 @@ impl Cli {
                 let percent = brightness_to_percent(device.brightness, device.max_brightness).get();
                 println!("{percent:.2}");
             }
-            Command::Info(filters) => {
-                let filters = filters.into();
-                for device in device::get_devices(&filters)? {
-                    println!(
-                        "{}\n\tpath = {}\n\tclass = {}\n\tbrightness = {}\n\tmax_brightness = {}",
-                        device.name.display(),
-                        device.path.display(),
-                        device.class,
-                        device.brightness,
-                        device.max_brightness
-                    );
+            Command::Info(args) => {
+                let filters = args.filters.into();
+                let devices = device::get_devices(&filters)?;
+                match args.format {
+                    OutputFormat::Plain => {
+                        for device in devices {
+                            println!("{}", device.name.display());
+                            println!("    path = {}", device.path.display());
+                            println!("    class = {}", device.class);
+                            println!("    brightness = {}", device.brightness);
+                            println!("    max brightness  = {}", device.max_brightness);
+                        }
+                    }
+                    OutputFormat::Json => {
+                        #[derive(Serialize)]
+                        struct Output {
+                            devices: Vec<DeviceOutput>,
+                        }
+                        let devices = devices.map(DeviceOutput::from).collect();
+                        let output = serde_json::to_string(&Output { devices })?;
+                        println!("{output}");
+                    }
+                    OutputFormat::JsonLines => {
+                        for device in devices {
+                            let device = DeviceOutput::from(device);
+                            let output = serde_json::to_string(&device)?;
+                            println!("{output}");
+                        }
+                    }
+                    OutputFormat::CSV => {
+                        for device in devices {
+                            println!(
+                                "{},{},{},{},{}",
+                                device.name.display(),
+                                device.path.display(),
+                                device.class,
+                                device.brightness,
+                                device.max_brightness
+                            );
+                        }
+                    }
                 }
             }
             Command::Save(mut args) => {
