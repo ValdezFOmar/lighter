@@ -227,7 +227,7 @@ struct UpdateArgs {
     #[arg(value_parser = percent::clap_parser)]
     percent: Percent,
 
-    /// Do not modify the brightness, only pretend to do it.
+    /// Do not modify any device, only pretend to do it.
     #[arg(short, long)]
     simulate: bool,
 
@@ -246,7 +246,7 @@ enum OutputFormat {
 
 #[derive(Args)]
 struct InfoArgs {
-    /// Output format for devices
+    /// Format to output device data
     #[arg(short, long, value_enum, default_value_t)]
     format: OutputFormat,
 
@@ -256,14 +256,14 @@ struct InfoArgs {
 
 #[derive(Args)]
 struct SaveArgs {
-    /// Destiny of persistent files.
+    /// Path to the file where device state will be saved
     #[arg(short, long, value_parser = validate_file_path)]
     file: Option<FilePath>,
 
     #[command(flatten)]
     filters: FilterArgs,
 
-    /// Print default values used without saving.
+    /// Print the values that would be used without saving.
     #[arg(long)]
     print_defaults: bool,
 }
@@ -278,14 +278,14 @@ enum Command {
     Set(UpdateArgs),
     /// Get current brightness as a percentage.
     Get(FilterArgs),
-    /// Get information about backlight devices.
+    /// Get information about devices.
     Info(InfoArgs),
-    /// Save current brightness
+    /// Save current device(s) brightness
     Save(SaveArgs),
     /// Restore brightness (inverse of `save` command)
     Restore {
-        /// File path to restore the brightness from
-        #[arg(short, long, value_parser=validate_file_path)]
+        /// Path to the file to read device state from
+        #[arg(short, long, value_parser = validate_file_path)]
         file: Option<FilePath>,
     },
 }
@@ -296,6 +296,7 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 
+    /// Set verbosity level
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
 }
