@@ -70,10 +70,10 @@ mod percent {
     }
 
     pub fn clap_parser(s: &str) -> Result<Percent, String> {
-        let percent: f32 = s
-            .parse()
-            .map_err(|_| format!("`{s}` is not a percentage"))?;
-        Percent::new(percent).ok_or_else(|| format!("`{s}` is not a percentage between 0 and 100"))
+        let percent = s
+            .parse::<f32>()
+            .map_err(|_| "not a percentage".to_string())?;
+        Percent::new(percent).ok_or_else(|| "not a percentage between 0 and 100".to_string())
     }
 
     #[test]
@@ -152,8 +152,9 @@ fn update_brightness(args: UpdateArgs, action: UpdateAction) -> io::Result<()> {
 }
 
 fn get_xdg_state_path() -> Option<PathBuf> {
-    env::var_os("XDG_STATE_HOME")
-        .filter(|s| !s.is_empty())
+    let path = env::var_os("XDG_STATE_HOME");
+    log::info!("XDG_STATE_HOME = {path:?}");
+    path.filter(|s| !s.is_empty())
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .or_else(|| Some(env::home_dir()?.join(".local/state")))
@@ -163,9 +164,8 @@ fn get_xdg_state_path() -> Option<PathBuf> {
 type FilePath = (PathBuf, String);
 
 fn get_save_path(default: Option<FilePath>) -> io::Result<FilePath> {
-    const DATA_FILE_NAME: &str = "device-data.json";
     default
-        .or_else(|| Some((get_xdg_state_path()?, DATA_FILE_NAME.into())))
+        .or_else(|| Some((get_xdg_state_path()?, "device-data.json".into())))
         .ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "could not determine a valid path")
         })
@@ -173,7 +173,7 @@ fn get_save_path(default: Option<FilePath>) -> io::Result<FilePath> {
 
 fn validate_file_path(opt: &str) -> Result<FilePath, String> {
     if opt.ends_with('/') {
-        return Err(format!("\"{opt}\" must a path to a file, not a directory"));
+        return Err("must be a path to a file, not a directory".to_string());
     }
 
     let path = PathBuf::from(opt);
@@ -182,7 +182,7 @@ fn validate_file_path(opt: &str) -> Result<FilePath, String> {
         .map_or_else(|| PathBuf::from(""), PathBuf::from);
     let name = path
         .file_name()
-        .ok_or_else(|| format!("\"{opt}\" has no file name"))?
+        .ok_or_else(|| "path has no name component".to_string())?
         .to_string_lossy()
         .into_owned();
 
@@ -379,7 +379,7 @@ impl Cli {
                 if args.print_defaults {
                     let devices = devices.map(|dev| dev.name).collect::<Vec<_>>().join(", ");
                     println!("file = {}", file_path.display());
-                    println!("device(s) = {}", devices);
+                    println!("device(s) = {devices}");
                     return Ok(());
                 }
 

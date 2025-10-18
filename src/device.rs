@@ -165,7 +165,7 @@ fn iter_devices(filters: &DeviceFilters) -> io::Result<impl Iterator<Item = Devi
 
 fn not_found_err(filters: &DeviceFilters) -> io::Error {
     let msg = if let Some(name) = &filters.device_name {
-        format!(r#"device with name {name} not found"#)
+        format!(r#"device with name "{name}" not found"#)
     } else {
         "no devices found".to_string()
     };
