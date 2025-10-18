@@ -1,5 +1,4 @@
 use std::env;
-use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -161,7 +160,7 @@ fn get_xdg_state_path() -> Option<PathBuf> {
         .map(|p| p.join(BIN_NAME))
 }
 
-type FilePath = (PathBuf, OsString);
+type FilePath = (PathBuf, String);
 
 fn get_save_path(default: Option<FilePath>) -> io::Result<FilePath> {
     const DATA_FILE_NAME: &str = "device-data.json";
@@ -184,7 +183,8 @@ fn validate_file_path(opt: &str) -> Result<FilePath, String> {
     let name = path
         .file_name()
         .ok_or_else(|| format!("\"{opt}\" has no file name"))?
-        .to_os_string();
+        .to_string_lossy()
+        .into_owned();
 
     Ok((base, name))
 }
@@ -201,7 +201,7 @@ impl From<Device> for DeviceOutput {
     #[inline]
     fn from(device: Device) -> Self {
         Self {
-            name: device.name.to_string_lossy().to_string(),
+            name: device.name,
             path: device.path,
             class: device.class,
             brightness: device.brightness,
@@ -218,7 +218,7 @@ struct FilterArgs {
 
     /// Filter by device name
     #[arg(short, long)]
-    device: Option<OsString>,
+    device: Option<String>,
 }
 
 #[derive(Args)]
@@ -327,7 +327,7 @@ impl Cli {
                 match args.format {
                     OutputFormat::Plain => {
                         for device in devices {
-                            println!("{}", device.name.display());
+                            println!("{}", device.name);
                             println!("    path = {}", device.path.display());
                             println!("    class = {}", device.class);
                             println!("    brightness = {}", device.brightness);
@@ -354,7 +354,7 @@ impl Cli {
                         for device in devices {
                             println!(
                                 "{},{},{},{},{}",
-                                device.name.display(),
+                                device.name,
                                 device.path.display(),
                                 device.class,
                                 device.brightness,
@@ -377,12 +377,9 @@ impl Cli {
                 let devices = device::get_devices(&filters)?;
 
                 if args.print_defaults {
-                    let devices = devices
-                        .map(|dev| dev.name)
-                        .collect::<Vec<_>>()
-                        .join(OsStr::new(", "));
+                    let devices = devices.map(|dev| dev.name).collect::<Vec<_>>().join(", ");
                     println!("file = {}", file_path.display());
-                    println!("device(s) = {}", devices.display());
+                    println!("device(s) = {}", devices);
                     return Ok(());
                 }
 
@@ -408,12 +405,12 @@ impl Cli {
                                 fail_to_restore = true;
                                 log::error!(
                                     r#"failed to set brightness for device "{}": {err}"#,
-                                    device.name.display()
+                                    device.name
                                 );
                             } else {
                                 log::info!(
                                     r#"restored device "{}" with brightness: {}"#,
-                                    device.name.display(),
+                                    device.name,
                                     device.brightness
                                 );
                             }

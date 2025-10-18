@@ -1,4 +1,3 @@
-use std::ffi::OsString;
 use std::fmt::Display;
 use std::fs;
 use std::io;
@@ -52,7 +51,7 @@ impl From<Device> for SaveData {
 #[derive(Debug, Clone)]
 pub struct Device {
     /// Device name, derived from its path.
-    pub name: OsString,
+    pub name: String,
     /// Full path to the device, including its name.
     pub path: PathBuf,
     pub class: DeviceClass,
@@ -69,24 +68,25 @@ impl Device {
         Ok(())
     }
 
-    pub fn from_path(prefix: impl AsRef<Path>) -> io::Result<Self> {
-        fn inner(prefix: &Path) -> io::Result<Device> {
-            log::debug!("creating device from path: {}", prefix.display());
+    pub fn from_path(prefix: impl Into<PathBuf>) -> io::Result<Self> {
+        fn inner(path: PathBuf) -> io::Result<Device> {
+            log::debug!("creating device from path: {}", path.display());
 
-            let name = prefix
+            let name = path
                 .file_name()
-                .ok_or_else(|| io::Error::other(format!("{} has no file name", prefix.display())))?
-                .to_os_string();
+                .ok_or_else(|| io::Error::other(format!("{} has no file name", path.display())))?
+                .to_string_lossy()
+                .into_owned();
 
-            let brightness = parse_brightness(&prefix.join("brightness"))?;
-            let max_brightness = parse_brightness(&prefix.join("max_brightness"))?;
+            let brightness = parse_brightness(&path.join("brightness"))?;
+            let max_brightness = parse_brightness(&path.join("max_brightness"))?;
 
             assert!(
                 brightness <= max_brightness,
                 "brightness = {brightness} > max_brightness = {max_brightness}"
             );
 
-            let class = match prefix
+            let class = match path
                 .parent()
                 .and_then(|path| path.file_name())
                 .and_then(|name| name.to_str())
@@ -97,13 +97,13 @@ impl Device {
 
             Ok(Device {
                 name,
+                path,
                 class,
                 brightness,
                 max_brightness,
-                path: prefix.to_path_buf(),
             })
         }
-        inner(prefix.as_ref())
+        inner(prefix.into())
     }
 }
 
@@ -117,7 +117,7 @@ fn parse_brightness(path: &Path) -> io::Result<Brightness> {
 #[derive(Default)]
 pub struct DeviceFilters {
     pub class: Option<DeviceClass>,
-    pub device_name: Option<OsString>,
+    pub device_name: Option<String>,
 }
 
 impl From<crate::FilterArgs> for DeviceFilters {
@@ -157,7 +157,7 @@ fn iter_devices(filters: &DeviceFilters) -> io::Result<impl Iterator<Item = Devi
     paths.sort();
 
     Ok(paths.into_iter().filter_map(|path| {
-        Device::from_path(&path)
+        Device::from_path(path.clone())
             .inspect_err(|err| log::warn!("{err}: {}", path.display()))
             .ok()
     }))
@@ -165,7 +165,7 @@ fn iter_devices(filters: &DeviceFilters) -> io::Result<impl Iterator<Item = Devi
 
 fn not_found_err(filters: &DeviceFilters) -> io::Error {
     let msg = if let Some(name) = &filters.device_name {
-        format!("device with name \"{}\" not found", name.display())
+        format!(r#"device with name {name} not found"#)
     } else {
         "no devices found".to_string()
     };
