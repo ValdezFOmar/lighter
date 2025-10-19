@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -13,6 +13,8 @@ use crate::percent::Percent;
 mod device;
 
 mod logger {
+    use std::io::{self, Write};
+
     use crate::BIN_NAME;
     use log::{Level, Metadata, Record};
 
@@ -25,7 +27,14 @@ mod logger {
 
         fn log(&self, record: &Record) {
             if self.enabled(record.metadata()) {
-                eprintln!("{BIN_NAME}: {}: {}", record.level(), record.args());
+                let severity = match record.level() {
+                    Level::Error => "error",
+                    Level::Warn => "warning",
+                    Level::Info => "info",
+                    Level::Debug => "debug",
+                    Level::Trace => "trace",
+                };
+                _ = writeln!(io::stderr(), "{BIN_NAME}: {severity}: {}", record.args());
             }
         }
 
@@ -146,7 +155,7 @@ fn update_brightness(args: UpdateArgs, action: UpdateAction) -> io::Result<()> {
     }
 
     let percent = brightness_to_percent(brightness, device.max_brightness).get();
-    println!("{percent:.2}");
+    writeln!(io::stdout(), "{percent:.2}")?;
 
     Ok(())
 }
@@ -319,19 +328,20 @@ impl Cli {
             Command::Get(filters) => {
                 let device = device::get_device(&filters.into())?;
                 let percent = brightness_to_percent(device.brightness, device.max_brightness).get();
-                println!("{percent:.2}");
+                writeln!(io::stdout(), "{percent:.2}")?;
             }
             Command::Info(args) => {
                 let filters = args.filters.into();
                 let devices = device::get_devices(&filters)?;
                 match args.format {
                     OutputFormat::Plain => {
+                        let mut stdout = io::stdout();
                         for device in devices {
-                            println!("{}", device.name);
-                            println!("    path = {}", device.path.display());
-                            println!("    class = {}", device.class);
-                            println!("    brightness = {}", device.brightness);
-                            println!("    max brightness  = {}", device.max_brightness);
+                            writeln!(stdout, "{}", device.name)?;
+                            writeln!(stdout, "    path = {}", device.path.display())?;
+                            writeln!(stdout, "    class = {}", device.class)?;
+                            writeln!(stdout, "    brightness = {}", device.brightness)?;
+                            writeln!(stdout, "    max brightness  = {}", device.max_brightness)?;
                         }
                     }
                     OutputFormat::Json => {
@@ -341,25 +351,28 @@ impl Cli {
                         }
                         let devices = devices.map(DeviceOutput::from).collect();
                         let output = serde_json::to_string(&Output { devices })?;
-                        println!("{output}");
+                        writeln!(io::stdout(), "{output}")?;
                     }
                     OutputFormat::JsonLines => {
+                        let mut stdout = io::stdout();
                         for device in devices {
                             let device = DeviceOutput::from(device);
                             let output = serde_json::to_string(&device)?;
-                            println!("{output}");
+                            writeln!(stdout, "{output}")?;
                         }
                     }
                     OutputFormat::CSV => {
+                        let mut stdout = io::stdout();
                         for device in devices {
-                            println!(
+                            writeln!(
+                                stdout,
                                 "{},{},{},{},{}",
                                 device.name,
                                 device.path.display(),
                                 device.class,
                                 device.brightness,
                                 device.max_brightness
-                            );
+                            )?;
                         }
                     }
                 }
@@ -378,8 +391,9 @@ impl Cli {
 
                 if args.print_defaults {
                     let devices = devices.map(|dev| dev.name).collect::<Vec<_>>().join(", ");
-                    println!("file = {}", file_path.display());
-                    println!("device(s) = {devices}");
+                    let mut stdout = io::stdout();
+                    writeln!(stdout, "file = {}", file_path.display())?;
+                    writeln!(stdout, "device(s) = {devices}")?;
                     return Ok(());
                 }
 
@@ -440,6 +454,11 @@ fn main() -> ExitCode {
     log::set_max_level(cli.log_level());
 
     if let Err(err) = cli.run() {
+        if let Some(ioerr) = err.downcast_ref::<io::Error>()
+            && ioerr.kind() == io::ErrorKind::BrokenPipe
+        {
+            return ExitCode::SUCCESS;
+        }
         log::error!("{err}");
         ExitCode::FAILURE
     } else {
