@@ -1,13 +1,14 @@
 use std::env;
+use std::error::Error;
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 
-use crate::device::{Brightness, Device, DeviceClass, SaveData};
+use crate::device::{Brightness, Class, Device};
 use crate::percent::Percent;
 
 mod device;
@@ -139,10 +140,11 @@ enum UpdateAction {
     Set,
 }
 
-fn update_brightness(args: UpdateArgs, action: UpdateAction) -> io::Result<()> {
+fn update_brightness(args: UpdateArgs, action: UpdateAction) -> Result<(), Box<dyn Error>> {
+    use UpdateAction as UA;
+
     let mut device = device::get_device(&args.filters.into())?;
 
-    use UpdateAction as UA;
     let percent = match action {
         UA::Add => brightness_to_percent(device.brightness, device.max_brightness) + args.percent,
         UA::Sub => brightness_to_percent(device.brightness, device.max_brightness) - args.percent,
@@ -197,11 +199,27 @@ fn validate_file_path(opt: &str) -> Result<FilePath, String> {
 
     Ok((base, name))
 }
+
+#[derive(Serialize, Deserialize)]
+pub struct SaveData {
+    pub path: PathBuf,
+    pub brightness: Brightness,
+}
+
+impl From<Device> for SaveData {
+    fn from(device: Device) -> Self {
+        Self {
+            path: device.path,
+            brightness: device.brightness,
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct DeviceOutput {
     name: String,
     path: PathBuf,
-    class: DeviceClass,
+    class: Class,
     brightness: Brightness,
     max_brightness: Brightness,
 }
@@ -223,7 +241,7 @@ impl From<Device> for DeviceOutput {
 struct FilterArgs {
     /// Filter by device class
     #[arg(short, long, value_enum)]
-    class: Option<DeviceClass>,
+    class: Option<Class>,
 
     /// Filter by device name
     #[arg(short, long)]
@@ -250,7 +268,7 @@ enum OutputFormat {
     Plain,
     Json,
     JsonLines,
-    CSV,
+    Csv,
 }
 
 #[derive(Args)]
@@ -320,7 +338,7 @@ impl Cli {
         }
     }
 
-    fn run(self) -> Result<(), Box<dyn core::error::Error>> {
+    fn run(self) -> Result<(), Box<dyn Error>> {
         match self.command {
             Command::Add(args) => update_brightness(args, UpdateAction::Add)?,
             Command::Sub(args) => update_brightness(args, UpdateAction::Sub)?,
@@ -361,7 +379,7 @@ impl Cli {
                             writeln!(stdout, "{output}")?;
                         }
                     }
-                    OutputFormat::CSV => {
+                    OutputFormat::Csv => {
                         let mut stdout = io::stdout();
                         for device in devices {
                             writeln!(
@@ -381,7 +399,7 @@ impl Cli {
                 // Save all backlight devices by default if no filters were provided,
                 // on the belief that this would be the common usage.
                 if args.filters.class.is_none() && args.filters.device.is_none() {
-                    args.filters.class = Some(DeviceClass::Backlight);
+                    args.filters.class = Some(Class::Backlight);
                 }
 
                 let (base_path, name) = get_save_path(args.file)?;
