@@ -13,11 +13,32 @@ use crate::percent::Percent;
 
 mod device;
 
+mod colors {
+    pub use anstyle::Reset;
+    use anstyle::{AnsiColor, Color, Style};
+
+    pub const NONE: Style = Style::new();
+    pub const BOLD: Style = Style::new().bold();
+
+    pub const RED: Style = fg(AnsiColor::Red);
+    pub const CYAN: Style = fg(AnsiColor::Cyan);
+    pub const BLUE: Style = fg(AnsiColor::Blue);
+    pub const GREEN: Style = fg(AnsiColor::Green);
+    pub const YELLOW: Style = fg(AnsiColor::Yellow);
+    pub const MAGENTA: Style = fg(AnsiColor::Magenta);
+
+    const fn fg(color: AnsiColor) -> Style {
+        Style::new().fg_color(Some(Color::Ansi(color)))
+    }
+}
+
 mod logger {
-    use std::io::{self, Write};
+    use std::io::Write;
+
+    use log::{Level, Metadata, Record};
 
     use crate::BIN_NAME;
-    use log::{Level, Metadata, Record};
+    use crate::colors::{self, CYAN, GREEN, MAGENTA, RED, Reset, YELLOW};
 
     pub struct Logger;
 
@@ -28,14 +49,23 @@ mod logger {
 
         fn log(&self, record: &Record) {
             if self.enabled(record.metadata()) {
-                let severity = match record.level() {
-                    Level::Error => "error",
-                    Level::Warn => "warning",
-                    Level::Info => "info",
-                    Level::Debug => "debug",
-                    Level::Trace => "trace",
+                let (severity, color) = match record.level() {
+                    Level::Error => ("error", RED),
+                    Level::Warn => ("warning", YELLOW),
+                    Level::Info => ("info", GREEN),
+                    Level::Debug => ("debug", MAGENTA),
+                    Level::Trace => ("trace", MAGENTA),
                 };
-                _ = writeln!(io::stderr(), "{BIN_NAME}: {severity}: {}", record.args());
+                let msg_color = if record.level() == Level::Error {
+                    colors::BOLD
+                } else {
+                    colors::NONE
+                };
+                _ = writeln!(
+                    anstream::stderr(),
+                    "{CYAN}{BIN_NAME}{CYAN:#}: {color}{severity}{color:#}: {msg_color}{}{Reset}",
+                    record.args()
+                );
             }
         }
 
@@ -271,6 +301,57 @@ enum OutputFormat {
     Csv,
 }
 
+impl OutputFormat {
+    fn print<O, I>(self, output: &mut O, devices: I) -> io::Result<()>
+    where
+        O: Write,
+        I: Iterator<Item = Device>,
+    {
+        use crate::colors::{BLUE, CYAN, GREEN, MAGENTA, Reset as R, YELLOW};
+        match self {
+            OutputFormat::Plain => {
+                for device in devices {
+                    writeln!(output, "{MAGENTA}{}{R}", device.name)?;
+                    writeln!(output, "    {CYAN}path:{R} {}", device.path.display())?;
+                    writeln!(output, "    {CYAN}class:{R} {}", device.class)?;
+                    writeln!(output, "    {CYAN}brightness: {R} {}", device.brightness)?;
+                    writeln!(output, "    {CYAN}max brightness:{R} {}", device.max_brightness)?;
+                }
+            }
+            OutputFormat::Json => {
+                #[derive(Serialize)]
+                struct Output {
+                    devices: Vec<DeviceOutput>,
+                }
+                let devices = devices.map(DeviceOutput::from).collect();
+                let json = serde_json::to_string(&Output { devices })?;
+                writeln!(output, "{json}")?;
+            }
+            OutputFormat::JsonLines => {
+                for device in devices {
+                    let device = DeviceOutput::from(device);
+                    let json = serde_json::to_string(&device)?;
+                    writeln!(output, "{json}")?;
+                }
+            }
+            OutputFormat::Csv => {
+                for device in devices {
+                    writeln!(
+                        output,
+                        "{BLUE}{}{R},{GREEN}{}{R},{YELLOW}{}{R},{CYAN}{}{R},{MAGENTA}{}{R}",
+                        device.name,
+                        device.path.display(),
+                        device.class,
+                        device.brightness,
+                        device.max_brightness
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Args)]
 struct InfoArgs {
     /// Format to output device data
@@ -317,6 +398,7 @@ enum Command {
     },
 }
 
+/// Control and fetch brightness information for backlight and led devices.
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -326,6 +408,9 @@ struct Cli {
     /// Set verbosity level
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
+
+    #[command(flatten)]
+    color: colorchoice_clap::Color,
 }
 
 impl Cli {
@@ -351,49 +436,8 @@ impl Cli {
             Command::Info(args) => {
                 let filters = args.filters.into();
                 let devices = device::get_devices(&filters)?;
-                match args.format {
-                    OutputFormat::Plain => {
-                        let mut stdout = io::stdout();
-                        for device in devices {
-                            writeln!(stdout, "{}", device.name)?;
-                            writeln!(stdout, "    path = {}", device.path.display())?;
-                            writeln!(stdout, "    class = {}", device.class)?;
-                            writeln!(stdout, "    brightness = {}", device.brightness)?;
-                            writeln!(stdout, "    max brightness  = {}", device.max_brightness)?;
-                        }
-                    }
-                    OutputFormat::Json => {
-                        #[derive(Serialize)]
-                        struct Output {
-                            devices: Vec<DeviceOutput>,
-                        }
-                        let devices = devices.map(DeviceOutput::from).collect();
-                        let output = serde_json::to_string(&Output { devices })?;
-                        writeln!(io::stdout(), "{output}")?;
-                    }
-                    OutputFormat::JsonLines => {
-                        let mut stdout = io::stdout();
-                        for device in devices {
-                            let device = DeviceOutput::from(device);
-                            let output = serde_json::to_string(&device)?;
-                            writeln!(stdout, "{output}")?;
-                        }
-                    }
-                    OutputFormat::Csv => {
-                        let mut stdout = io::stdout();
-                        for device in devices {
-                            writeln!(
-                                stdout,
-                                "{},{},{},{},{}",
-                                device.name,
-                                device.path.display(),
-                                device.class,
-                                device.brightness,
-                                device.max_brightness
-                            )?;
-                        }
-                    }
-                }
+                let mut ouput = anstream::stdout().lock();
+                args.format.print(&mut ouput, devices)?;
             }
             Command::Save(mut args) => {
                 // Save all backlight devices by default if no filters were provided,
@@ -468,6 +512,8 @@ impl Cli {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    cli.color.write_global();
+
     log::set_logger(&logger::Logger).expect("setting logger");
     log::set_max_level(cli.log_level());
 
