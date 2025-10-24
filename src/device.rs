@@ -158,11 +158,11 @@ impl Device {
 }
 
 fn parse_brightness(path: &Path) -> DeviceResult<Brightness> {
-    Ok(fs::read_to_string(path)
+    fs::read_to_string(path)
         .map_err(|err| PathError::new(err, path))?
         .trim()
         .parse()
-        .map_err(|err| DeviceError::from_parse_err(err, path))?)
+        .map_err(|err| DeviceError::from_parse_err(err, path))
 }
 
 #[derive(Debug, Clone, Default)]
