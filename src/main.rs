@@ -438,7 +438,7 @@ impl Cli {
         }
     }
 
-    fn run(self) -> Result<(), Box<dyn Error>> {
+    fn run(self) -> Result<ExitCode, Box<dyn Error>> {
         match self.command {
             Command::Add(args) => update_brightness(args, UpdateAction::Add)?,
             Command::Sub(args) => update_brightness(args, UpdateAction::Sub)?,
@@ -471,7 +471,7 @@ impl Cli {
                     let mut stdout = io::stdout();
                     writeln!(stdout, "file = {}", file_path.display())?;
                     writeln!(stdout, "device(s) = {devices}")?;
-                    return Ok(());
+                    return Ok(ExitCode::SUCCESS);
                 }
 
                 let data: Vec<_> = devices.map(SaveData::from).collect();
@@ -514,14 +514,12 @@ impl Cli {
                 }
 
                 if fail_to_restore {
-                    // Extra error to allow main to return with non-zero status code
-                    // in case any errors happened while trying to restore any device.
-                    return Err(io::Error::other("failed to restore some devices").into());
+                    return Ok(ExitCode::FAILURE);
                 }
             }
         }
 
-        Ok(())
+        Ok(ExitCode::SUCCESS)
     }
 }
 
@@ -532,16 +530,17 @@ fn main() -> ExitCode {
     log::set_logger(&logger::Logger).expect("setting logger");
     log::set_max_level(cli.log_level());
 
-    if let Err(err) = cli.run() {
-        if let Some(ioerr) = err.downcast_ref::<io::Error>()
-            && ioerr.kind() == io::ErrorKind::BrokenPipe
-        {
-            return ExitCode::SUCCESS;
+    match cli.run() {
+        Ok(code) => code,
+        Err(err) => {
+            if let Some(ioerr) = err.downcast_ref::<io::Error>()
+                && ioerr.kind() == io::ErrorKind::BrokenPipe
+            {
+                return ExitCode::SUCCESS;
+            }
+            log::error!("{err}");
+            ExitCode::FAILURE
         }
-        log::error!("{err}");
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
     }
 }
 
