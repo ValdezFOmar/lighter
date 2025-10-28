@@ -9,7 +9,7 @@ backlight and led devices.
 
 Get the current brightness as a percentage:
 
-```cli
+```console
 $ brighter get
 65.15
 ```
@@ -18,7 +18,7 @@ $ brighter get
 
 Set brightness to a new value as a percentage:
 
-```cli
+```console
 $ brighter set 50
 50.00
 $ brighter add 10
@@ -35,7 +35,7 @@ percentages are supported, e.g. `12.5`.
 
 Get general information for available devices:
 
-```cli
+```console
 $ brighter info
 intel_backlight
     path: /sys/class/backlight/intel_backlight
@@ -51,7 +51,7 @@ platform::fnlock
 
 You can also specify a different format:
 
-```cli
+```console
 $ brighter info --format=csv
 intel_backlight,/sys/class/backlight/intel_backlight,backlight,514,21333
 platform::fnlock,/sys/class/leds/platform::fnlock,leds,1,1
@@ -78,11 +78,13 @@ restore`.
 Most commands accept filter arguments to target devices more
 specifically, for example:
 
-```cli
+```console
 $ brighter get --device platform::fnlock --class leds
 100.00
 
-$ brighter info --class leds
+$ brighter info --class leds --format csv
+input2::capslock,/sys/class/leds/input2::capslock,leds,0,1
+platform::fnlock,/sys/class/leds/platform::fnlock,leds,1,1
 
 $ brighter set --device input2::capslock 100
 100.00
