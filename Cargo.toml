@@ -2,6 +2,11 @@
 name = "brighter"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "Control and fetch brightness information for backlight and led devices"
+repository = "https://github.com/ValdezFOmar/brighter"
+readme = "README.md"
+include = ["/src", "README.md", "LICENSE"]
 
 [dependencies]
 anstream = "0.6.21"

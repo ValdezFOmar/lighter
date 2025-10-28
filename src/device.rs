@@ -128,6 +128,9 @@ impl Device {
                 .to_string_lossy()
                 .into_owned();
 
+            // Available paths to device properties
+            // https://www.kernel.org/doc/html/latest/admin-guide/abi-stable-files.html#abi-file-stable-sysfs-class-backlight
+
             let brightness = parse_brightness(&path.join("brightness"))?;
             let max_brightness = parse_brightness(&path.join("max_brightness"))?;
 

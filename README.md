@@ -1,33 +1,91 @@
 # Brighter
 
-## Interface
+Command line utility to control and fetch brightness information for
+backlight and led devices.
 
-For the MVP, only support cases where there's just one device.
-Proposed API:
+## Examples
 
-```bash
-brighter info # show backlight device information
-brighter get {value} # get current brightness percentage
-brighter set {value} # set brightness percentage
-brighter add {value} # add percentage to current brightness
-brighter sub {value} # subtract percentage from current brightness
+### Get brightness
+
+Get the current brightness as a percentage:
+
+```cli
+$ brighter get
+65.15
 ```
 
-Where:
+### Set brightness
 
-- `{value}` is always a percent (without '%')
-- The percentage is calculated relative to the maximum and scaled to
-  adjust it to [human perception][perception].
+Set brightness to a new value as a percentage:
 
-Formula for calculating the perceived percentage of a given value:
-
+```cli
+$ brighter set 50
+50.00
+$ brighter add 10
+60.00
+$ brighter sub 20
+40.00
 ```
-# value to percent
-percent = log10(value) * 100 / log10(max_value)
-        = log(value, base=max_value) * 100
-# percent to value
-value = 10 ^ (percent * log10(max_value) / 100)
+
+The value supplied is always taken as a percentage (without `%`) and is
+scaled to adjust it to [human perception][perception]. Fractional
+percentages are supported, e.g. `12.5`.
+
+### Get device info
+
+Get general information for available devices:
+
+```cli
+$ brighter info
+intel_backlight
+    path: /sys/class/backlight/intel_backlight
+    class: backlight
+    brightness:  514
+    max brightness: 21333
+platform::fnlock
+    path: /sys/class/leds/platform::fnlock
+    class: leds
+    brightness:  1
+    max brightness: 1
+```
+
+You can also specify a different format:
+
+```cli
+$ brighter info --format=csv
+intel_backlight,/sys/class/backlight/intel_backlight,backlight,514,21333
+platform::fnlock,/sys/class/leds/platform::fnlock,leds,1,1
+
+$ brighter info --format=json-lines
+{"name":"intel_backlight","path":"/sys/class/backlight/intel_backlight","class":"backlight","brightness":514,"max_brightness":21333}
+{"name":"platform::fnlock","path":"/sys/class/leds/platform::fnlock","class":"leds","brightness":1,"max_brightness":1}
+```
+
+### Save/Restore brightness
+
+You can save the current brightness value for devices using the `save`
+command: `$ brighter save`. By default, the brightness for all devices
+of class `backlight` is saved, but you can change this using
+[filters](#filters).
+
+The saved brightness value is stored under under
+`$XDG_STATE_HOME/brighter` or `~/.local/state/brighter` by default.
+You can restore the brightness with the `restore` command: `$ brighter
+restore`.
+
+### Filters
+
+Most commands accept filter arguments to target devices more
+specifically, for example:
+
+```cli
+$ brighter get --device platform::fnlock --class leds
+100.00
+
+$ brighter info --class leds
+
+$ brighter set --device input2::capslock 100
+100.00
 ```
 
 [perception]: https://konradstrack.ninja/blog/changing-screen-brightness-in-accordance-with-human-perception/
-[sysfs-backlight]: https://www.kernel.org/doc/html/latest/admin-guide/abi-stable-files.html#abi-file-stable-sysfs-class-backlight

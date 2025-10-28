@@ -75,6 +75,7 @@ mod logger {
 
 mod percent {
     use core::ops::{Add, Sub};
+    use std::fmt;
 
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub struct Percent(f32);
@@ -90,6 +91,12 @@ mod percent {
 
         pub fn get(self) -> f32 {
             self.0
+        }
+    }
+
+    impl fmt::Display for Percent {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            fmt::Display::fmt(&self.0, f)
         }
     }
 
@@ -132,6 +139,14 @@ mod percent {
 }
 
 const BIN_NAME: &str = env!("CARGO_BIN_NAME");
+
+// Formulas for calculating the perceived percentage of a given value:
+//
+// # value to percent
+// percent = log10(value) * 100 / log10(max_value)
+//         = log(value, base=max_value) * 100
+// # percent to value
+// value = 10 ^ (percent * log10(max_value) / 100)
 
 /// Convert to a brightness value relative to a maximum brightness.
 /// The conversion adjusts the value in accordance to [human perception][perception].
@@ -186,7 +201,7 @@ fn update_brightness(args: UpdateArgs, action: UpdateAction) -> Result<(), Box<d
         device.set_brightness(brightness)?;
     }
 
-    let percent = brightness_to_percent(brightness, device.max_brightness).get();
+    let percent = brightness_to_percent(brightness, device.max_brightness);
     writeln!(io::stdout(), "{percent:.2}")?;
 
     Ok(())
