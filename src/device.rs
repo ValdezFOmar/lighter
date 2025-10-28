@@ -98,7 +98,6 @@ impl From<PathError<io::Error>> for DeviceError {
 
 type DeviceResult<T> = Result<T, DeviceError>;
 
-#[derive(Debug, Clone)]
 pub struct Device {
     /// Device name, derived from its path.
     pub name: String,
@@ -194,30 +193,32 @@ fn iter_paths(prefix: &str) -> Result<impl Iterator<Item = PathBuf>, PathError<i
 
 fn iter_devices(
     filters: &DeviceFilters,
-) -> Result<impl Iterator<Item = Device>, PathError<io::Error>> {
-    let filter_name = |path: &PathBuf| -> bool {
-        filters
-            .device_name
-            .as_ref()
-            .is_none_or(|name| path.ends_with(name))
-    };
-
+) -> Result<impl Iterator<Item = Device> + '_, PathError<io::Error>> {
     let mut paths: Vec<PathBuf> = if let Some(class) = filters.class {
-        iter_paths(class.prefix())?.filter(filter_name).collect()
+        iter_paths(class.prefix())?.collect()
     } else {
         iter_paths(Class::Backlight.prefix())?
             .chain(iter_paths(Class::Leds.prefix())?)
-            .filter(filter_name)
             .collect()
     };
 
     paths.sort();
 
-    Ok(paths.into_iter().filter_map(|path| {
-        Device::from_path(path)
-            .inspect_err(|err| log::warn!("{err}"))
-            .ok()
-    }))
+    let paths = paths.into_iter().filter_map(|path| {
+        if filters
+            .device_name
+            .as_ref()
+            .is_none_or(|name| path.ends_with(name))
+        {
+            Device::from_path(path)
+                .inspect_err(|err| log::warn!("{err}"))
+                .ok()
+        } else {
+            None
+        }
+    });
+
+    Ok(paths)
 }
 
 #[derive(Debug)]
