@@ -317,7 +317,7 @@ enum OutputFormat {
 }
 
 impl OutputFormat {
-    fn print<O, I>(self, output: &mut O, devices: I) -> io::Result<()>
+    fn write<O, I>(self, mut output: O, devices: I) -> io::Result<()>
     where
         O: Write,
         I: Iterator<Item = Device>,
@@ -339,14 +339,12 @@ impl OutputFormat {
                     devices: Vec<DeviceOutput>,
                 }
                 let devices = devices.map(DeviceOutput::from).collect();
-                let json = serde_json::to_string(&Output { devices })?;
-                writeln!(output, "{json}")?;
+                serde_json::to_writer(output, &Output { devices })?;
             }
             OutputFormat::JsonLines => {
                 for device in devices {
                     let device = DeviceOutput::from(device);
-                    let json = serde_json::to_string(&device)?;
-                    writeln!(output, "{json}")?;
+                    serde_json::to_writer(&mut output, &device)?;
                 }
             }
             OutputFormat::Csv => {
@@ -421,7 +419,7 @@ struct Cli {
     command: Command,
 
     /// Set verbosity level
-    #[arg(short, long, action = clap::ArgAction::Count)]
+    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     verbose: u8,
 
     #[command(flatten)]
@@ -445,14 +443,14 @@ impl Cli {
             Command::Set(args) => update_brightness(args, UpdateAction::Set)?,
             Command::Get(filters) => {
                 let device = device::get_device(&filters.into())?;
-                let percent = brightness_to_percent(device.brightness, device.max_brightness).get();
+                let percent = brightness_to_percent(device.brightness, device.max_brightness);
                 writeln!(io::stdout(), "{percent:.2}")?;
             }
             Command::Info(args) => {
                 let filters = args.filters.into();
                 let devices = device::get_devices(&filters)?;
-                let mut ouput = anstream::stdout().lock();
-                args.format.print(&mut ouput, devices)?;
+                let ouput = anstream::stdout().lock();
+                args.format.write(ouput, devices)?;
             }
             Command::Save(mut args) => {
                 // Save all backlight devices by default if no filters were provided,
