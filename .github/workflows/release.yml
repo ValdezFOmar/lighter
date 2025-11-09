@@ -30,4 +30,5 @@ jobs:
           bin: brighter
           target: x86_64-unknown-linux-gnu
           include: LICENSE
+          archive: $bin-$tag-$target
           token: ${{ secrets.GITHUB_TOKEN }}
