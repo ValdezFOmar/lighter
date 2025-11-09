@@ -12,6 +12,7 @@ use crate::device::{Brightness, Class, Device};
 use crate::percent::Percent;
 
 mod device;
+mod man;
 
 mod colors {
     pub use anstyle::Reset;
@@ -409,6 +410,8 @@ enum Command {
         #[arg(short, long, value_parser = validate_file_path)]
         file: Option<FilePath>,
     },
+    /// Print man page to stdout
+    Man,
 }
 
 /// Control and fetch brightness information for backlight and led devices.
@@ -514,6 +517,9 @@ impl Cli {
                 if fail_to_restore {
                     return Ok(ExitCode::FAILURE);
                 }
+            }
+            Command::Man => {
+                man::render(&mut io::stdout().lock())?;
             }
         }
 
