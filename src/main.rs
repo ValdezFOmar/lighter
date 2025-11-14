@@ -81,15 +81,18 @@ mod percent {
     pub struct Percent(f32);
 
     impl Percent {
-        pub fn new(p: f32) -> Option<Self> {
-            if p.is_finite() && (0.0..=100.0).contains(&p) {
+        pub const MIN: Self = Self::new(0.0).unwrap();
+        pub const MAX: Self = Self::new(100.0).unwrap();
+
+        pub const fn new(p: f32) -> Option<Self> {
+            if p.is_finite() && p >= 0.0 && p <= 100.0 {
                 Some(Self(p))
             } else {
                 None
             }
         }
 
-        pub fn get(self) -> f32 {
+        pub const fn get(self) -> f32 {
             self.0
         }
     }
@@ -104,7 +107,7 @@ mod percent {
         type Output = Self;
 
         fn add(self, rhs: Self) -> Self::Output {
-            Self::new((self.0 + rhs.0).min(100.0)).expect("percent to not be greater than 100")
+            Self::new(self.0 + rhs.0).unwrap_or(Self::MAX)
         }
     }
 
@@ -112,7 +115,7 @@ mod percent {
         type Output = Self;
 
         fn sub(self, rhs: Self) -> Self::Output {
-            Self::new((self.0 - rhs.0).max(0.0)).expect("percent to not be less than 0")
+            Self::new(self.0 - rhs.0).unwrap_or(Self::MIN)
         }
     }
 
@@ -125,9 +128,9 @@ mod percent {
 
     #[test]
     fn test_percent() {
-        assert_eq!(Percent::new(0.0), Some(Percent(0.0)));
+        assert_eq!(Percent::new(0.0), Some(Percent::MIN));
         assert_eq!(Percent::new(15.0), Some(Percent(15.0)));
-        assert_eq!(Percent::new(100.0), Some(Percent(100.0)));
+        assert_eq!(Percent::new(100.0), Some(Percent::MAX));
         assert_eq!(Percent::new(-1.0), None);
         assert_eq!(Percent::new(101.0), None);
         assert_eq!(Percent::new(f32::MIN), None);
@@ -164,15 +167,14 @@ pub fn brightness_from_percent(percent: &Percent, max_brightness: Brightness) ->
 /// Inverse of `brightness_from_percent`.
 pub fn brightness_to_percent(brightness: Brightness, max_brightness: Brightness) -> Percent {
     if brightness == 0 {
-        return Percent::new(0.0).unwrap();
+        return Percent::MIN;
     }
     if max_brightness <= 1 {
-        let percent = if brightness < max_brightness {
-            0.0
+        return if brightness < max_brightness {
+            Percent::MIN
         } else {
-            100.0
+            Percent::MAX
         };
-        return Percent::new(percent).unwrap();
     }
     let percent = f32::from(brightness).log(f32::from(max_brightness)) * 100.0;
     Percent::new(percent).expect("percent calculation to always give a valid value")
