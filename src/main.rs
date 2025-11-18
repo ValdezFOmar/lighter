@@ -219,32 +219,23 @@ fn get_xdg_state_path() -> Option<PathBuf> {
         .map(|p| p.join(BIN_NAME))
 }
 
-type FilePath = (PathBuf, String);
-
-fn get_save_path(default: Option<FilePath>) -> io::Result<FilePath> {
+fn get_save_path(default: Option<PathBuf>) -> io::Result<PathBuf> {
     default
-        .or_else(|| Some((get_xdg_state_path()?, "device-data.json".into())))
+        .or_else(|| Some(get_xdg_state_path()?.join("device-data.json")))
         .ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "could not determine a valid path")
         })
 }
 
-fn validate_file_path(opt: &str) -> Result<FilePath, String> {
+fn validate_file_path(opt: &str) -> Result<PathBuf, String> {
     if opt.ends_with('/') {
         return Err("must be a path to a file, not a directory".to_string());
     }
-
     let path = PathBuf::from(opt);
-    let base = path
-        .parent()
-        .map_or_else(|| PathBuf::from(""), PathBuf::from);
-    let name = path
-        .file_name()
-        .ok_or_else(|| "path has no name component".to_string())?
-        .to_string_lossy()
-        .into_owned();
-
-    Ok((base, name))
+    if path.file_name().is_none() {
+        return Err("path has no name component".to_string());
+    }
+    Ok(path)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -381,7 +372,7 @@ struct InfoArgs {
 struct SaveArgs {
     /// Path to the file where device state will be saved
     #[arg(short, long, value_parser = validate_file_path)]
-    file: Option<FilePath>,
+    file: Option<PathBuf>,
 
     #[command(flatten)]
     filters: FilterArgs,
@@ -409,7 +400,7 @@ enum Command {
     Restore {
         /// Path to the file to read device state from
         #[arg(short, long, value_parser = validate_file_path)]
-        file: Option<FilePath>,
+        file: Option<PathBuf>,
     },
 }
 
@@ -461,8 +452,7 @@ impl Cli {
                     args.filters.class = Some(Class::Backlight);
                 }
 
-                let (base_path, name) = get_save_path(args.file)?;
-                let file_path = base_path.join(name);
+                let file_path = get_save_path(args.file)?;
                 let filters = args.filters.into();
                 let devices = device::get_devices(&filters)?;
 
@@ -475,16 +465,13 @@ impl Cli {
                 }
 
                 let data: Vec<_> = devices.map(SaveData::from).collect();
-                fs::create_dir_all(&base_path)?;
+                if let Some(prefix) = file_path.parent() {
+                    fs::create_dir_all(prefix)?;
+                }
                 fs::write(file_path, serde_json::to_string_pretty(&data)?)?;
             }
             Command::Restore { file } => {
-                let path = {
-                    let (base, name) = get_save_path(file)?;
-                    base.join(name)
-                };
-
-                let content = fs::read(path)?;
+                let content = fs::read(get_save_path(file)?)?;
                 let save_data: Vec<SaveData> = serde_json::from_slice(&content)?;
                 let mut fail_to_restore = false;
 
