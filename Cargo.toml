@@ -1,6 +1,6 @@
 [package]
 name = "brighter"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
 description = "Control and fetch brightness information for backlight and led devices"
