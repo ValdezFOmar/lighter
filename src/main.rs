@@ -200,7 +200,8 @@ fn update_brightness(args: UpdateArgs, action: UpdateAction) -> Result<(), Box<d
     let brightness = brightness_from_percent(&percent, device.max_brightness);
 
     if !args.simulate {
-        device.set_brightness(brightness)?;
+        let controller = device::Controller::new();
+        controller.set_brightness(&mut device, brightness)?;
     }
 
     let percent = brightness_to_percent(brightness, device.max_brightness);
@@ -473,13 +474,21 @@ impl Cli {
             Command::Restore { file } => {
                 let content = fs::read(get_save_path(file)?)?;
                 let save_data: Vec<SaveData> = serde_json::from_slice(&content)?;
+
+                if save_data.is_empty() {
+                    log::warn!("no devices to restore");
+                    return Ok(ExitCode::SUCCESS);
+                }
+
+                let controller = device::Controller::new();
                 let mut fail_to_restore = false;
 
                 // Explicitly handle all errors to allow restoring as much devices as possible.
                 for data in save_data {
                     match Device::from_path(data.path) {
                         Ok(mut device) => {
-                            if let Err(err) = device.set_brightness(data.brightness) {
+                            let res = controller.set_brightness(&mut device, data.brightness);
+                            if let Err(err) = res {
                                 fail_to_restore = true;
                                 log::error!(
                                     r#"failed to set brightness for device "{}": {err}"#,

@@ -1,4 +1,3 @@
-use std::error::Error;
 use std::fmt;
 use std::fmt::Display;
 use std::fs;
@@ -8,8 +7,11 @@ use std::path::{Path, PathBuf};
 
 use clap::ValueEnum;
 use serde::Serialize;
+use zbus::zvariant::Type;
 
 use error::PathError;
+
+pub use controller::Controller;
 
 mod error {
     use std::error::Error;
@@ -40,8 +42,85 @@ mod error {
     impl<E: Error> Error for PathError<E> {}
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum, Serialize)]
+mod controller {
+    use std::{fmt, io};
+
+    use zbus::blocking::connection::Connection;
+    use zbus::proxy;
+
+    use super::{Brightness, Class, Device, error::PathError};
+
+    #[derive(Debug)]
+    pub enum Error {
+        IO(PathError<io::Error>),
+        DBus(zbus::Error),
+    }
+
+    impl From<zbus::Error> for Error {
+        fn from(value: zbus::Error) -> Self {
+            Self::DBus(value)
+        }
+    }
+
+    impl From<PathError<io::Error>> for Error {
+        fn from(value: PathError<io::Error>) -> Self {
+            Self::IO(value)
+        }
+    }
+
+    impl fmt::Display for Error {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Error::IO(error) => error.fmt(f),
+                Error::DBus(error) => error.fmt(f),
+            }
+        }
+    }
+
+    impl core::error::Error for Error {}
+
+    #[proxy(
+        default_service = "org.freedesktop.login1",
+        default_path = "/org/freedesktop/login1/session/auto",
+        interface = "org.freedesktop.login1.Session"
+    )]
+    trait Session {
+        // `SetBrightness()` method, needs to be connected to the system bus.
+        // See: org.freedesktop.login1(5)
+        fn set_brightness(&self, class: Class, name: &str, brightness: u32) -> zbus::Result<()>;
+    }
+
+    pub struct Controller(Option<Connection>);
+
+    impl Controller {
+        pub fn new() -> Self {
+            let connection = Connection::system().inspect_err(|err| {
+                log::warn!("failed to connect to system bus: {err}");
+            });
+            Self(connection.ok())
+        }
+
+        pub fn set_brightness(&self, device: &mut Device, value: Brightness) -> Result<(), Error> {
+            let brightness = value.min(device.max_brightness);
+            if let Some(connection) = &self.0 {
+                log::debug!("setting brightness using D-Bus");
+                let proxy = SessionProxyBlocking::new(connection)?;
+                proxy.set_brightness(device.class, &device.name, u32::from(value))?;
+            } else {
+                let path = device.path.join("brightness");
+                log::debug!("setting brightness by writing to {}", path.display());
+                std::fs::write(&path, value.to_string())
+                    .map_err(|err| PathError::new(err, path))?;
+            }
+            device.brightness = brightness;
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Type, ValueEnum, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[zvariant(signature = "s")]
 pub enum Class {
     Leds,
     Backlight,
@@ -68,9 +147,9 @@ impl Display for Class {
 pub type Brightness = u16;
 
 #[derive(Debug)]
-pub struct DeviceError(PathError<io::Error>);
+pub struct Error(PathError<io::Error>);
 
-impl DeviceError {
+impl Error {
     fn from_no_name(path: impl Into<PathBuf>) -> Self {
         let err = io::Error::new(io::ErrorKind::InvalidFilename, "path has no name component");
         Self(PathError::new(err, path.into()))
@@ -82,21 +161,21 @@ impl DeviceError {
     }
 }
 
-impl fmt::Display for DeviceError {
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
 
-impl Error for DeviceError {}
+impl core::error::Error for Error {}
 
-impl From<PathError<io::Error>> for DeviceError {
+impl From<PathError<io::Error>> for Error {
     fn from(value: PathError<io::Error>) -> Self {
         Self(value)
     }
 }
 
-type DeviceResult<T> = Result<T, DeviceError>;
+type DeviceResult<T> = Result<T, Error>;
 
 pub struct Device {
     /// Device name, derived from its path.
@@ -109,21 +188,13 @@ pub struct Device {
 }
 
 impl Device {
-    pub fn set_brightness(&mut self, value: Brightness) -> DeviceResult<()> {
-        let path = self.path.join("brightness");
-        let brightness = value.min(self.max_brightness);
-        fs::write(&path, brightness.to_string()).map_err(|err| PathError::new(err, path))?;
-        self.brightness = brightness;
-        Ok(())
-    }
-
     pub fn from_path(prefix: impl Into<PathBuf>) -> DeviceResult<Device> {
         fn inner(path: PathBuf) -> DeviceResult<Device> {
             log::debug!("creating device from path: {}", path.display());
 
             let name = path
                 .file_name()
-                .ok_or_else(|| DeviceError::from_no_name(&path))?
+                .ok_or_else(|| Error::from_no_name(&path))?
                 .to_string_lossy()
                 .into_owned();
 
@@ -164,7 +235,7 @@ fn parse_brightness(path: &Path) -> DeviceResult<Brightness> {
         .map_err(|err| PathError::new(err, path))?
         .trim()
         .parse()
-        .map_err(|err| DeviceError::from_parse_err(err, path))
+        .map_err(|err| Error::from_parse_err(err, path))
 }
 
 #[derive(Debug, Clone, Default)]
