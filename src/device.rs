@@ -2,57 +2,25 @@ use std::fmt;
 use std::fmt::Display;
 use std::fs;
 use std::io;
-use std::num::ParseIntError;
 use std::path::{Path, PathBuf};
 
 use clap::ValueEnum;
 use serde::Serialize;
 use zbus::zvariant::Type;
 
-use error::PathError;
-
 pub use controller::Controller;
 
-mod error {
-    use std::error::Error;
-    use std::fmt;
-    use std::path::PathBuf;
-
-    #[derive(Debug)]
-    pub struct PathError<E: Error> {
-        error: E,
-        path: PathBuf,
-    }
-
-    impl<E: Error> PathError<E> {
-        pub fn new<P: Into<PathBuf>>(error: E, path: P) -> Self {
-            Self {
-                error,
-                path: path.into(),
-            }
-        }
-    }
-
-    impl<E: Error> fmt::Display for PathError<E> {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "{}: \"{}\"", self.error, self.path.display())
-        }
-    }
-
-    impl<E: Error> Error for PathError<E> {}
-}
-
 mod controller {
-    use std::{fmt, io};
+    use std::fmt;
 
     use zbus::blocking::connection::Connection;
     use zbus::proxy;
 
-    use super::{Brightness, Class, Device, error::PathError};
+    use super::{Brightness, Class, Device, PathError};
 
     #[derive(Debug)]
     pub enum Error {
-        IO(PathError<io::Error>),
+        IO(PathError),
         DBus(zbus::Error),
     }
 
@@ -62,8 +30,8 @@ mod controller {
         }
     }
 
-    impl From<PathError<io::Error>> for Error {
-        fn from(value: PathError<io::Error>) -> Self {
+    impl From<PathError> for Error {
+        fn from(value: PathError) -> Self {
             Self::IO(value)
         }
     }
@@ -118,6 +86,29 @@ mod controller {
     }
 }
 
+#[derive(Debug)]
+pub struct PathError {
+    error: io::Error,
+    path: PathBuf,
+}
+
+impl PathError {
+    pub fn new<P: Into<PathBuf>>(error: io::Error, path: P) -> Self {
+        Self {
+            error,
+            path: path.into(),
+        }
+    }
+}
+
+impl fmt::Display for PathError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: \"{}\"", self.error, self.path.display())
+    }
+}
+
+impl core::error::Error for PathError {}
+
 #[derive(Debug, Clone, Copy, Type, ValueEnum, Serialize)]
 #[serde(rename_all = "lowercase")]
 #[zvariant(signature = "s")]
@@ -146,37 +137,6 @@ impl Display for Class {
 
 pub type Brightness = u16;
 
-#[derive(Debug)]
-pub struct Error(PathError<io::Error>);
-
-impl Error {
-    fn from_no_name(path: impl Into<PathBuf>) -> Self {
-        let err = io::Error::new(io::ErrorKind::InvalidFilename, "path has no name component");
-        Self(PathError::new(err, path.into()))
-    }
-
-    fn from_parse_err(err: ParseIntError, path: impl Into<PathBuf>) -> Self {
-        let err = io::Error::new(io::ErrorKind::InvalidData, err);
-        Self(PathError::new(err, path.into()))
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl core::error::Error for Error {}
-
-impl From<PathError<io::Error>> for Error {
-    fn from(value: PathError<io::Error>) -> Self {
-        Self(value)
-    }
-}
-
-type DeviceResult<T> = Result<T, Error>;
-
 pub struct Device {
     /// Device name, derived from its path.
     pub name: String,
@@ -188,13 +148,15 @@ pub struct Device {
 }
 
 impl Device {
-    pub fn from_path(prefix: impl Into<PathBuf>) -> DeviceResult<Device> {
-        fn inner(path: PathBuf) -> DeviceResult<Device> {
+    pub fn from_path(prefix: impl Into<PathBuf>) -> Result<Device, PathError> {
+        fn inner(path: PathBuf) -> Result<Device, PathError> {
             log::debug!("creating device from path: {}", path.display());
 
             let name = path
                 .file_name()
-                .ok_or_else(|| Error::from_no_name(&path))?
+                .ok_or_else(|| {
+                    PathError::new(io::Error::other("path has no name component"), &path)
+                })?
                 .to_string_lossy()
                 .into_owned();
 
@@ -230,12 +192,12 @@ impl Device {
     }
 }
 
-fn parse_brightness(path: &Path) -> DeviceResult<Brightness> {
+fn parse_brightness(path: &Path) -> Result<Brightness, PathError> {
     fs::read_to_string(path)
         .map_err(|err| PathError::new(err, path))?
         .trim()
         .parse()
-        .map_err(|err| Error::from_parse_err(err, path))
+        .map_err(|err| PathError::new(io::Error::other(err), path))
 }
 
 #[derive(Debug, Clone, Default)]
@@ -254,7 +216,7 @@ impl From<crate::FilterArgs> for DeviceFilters {
     }
 }
 
-fn iter_paths(prefix: &str) -> Result<impl Iterator<Item = PathBuf>, PathError<io::Error>> {
+fn iter_paths(prefix: &str) -> Result<impl Iterator<Item = PathBuf>, PathError> {
     Ok(fs::read_dir(prefix)
         .map_err(|err| PathError::new(err, prefix))?
         .filter_map(|entry| entry.inspect_err(|err| log::warn!("{err}")).ok())
@@ -262,9 +224,7 @@ fn iter_paths(prefix: &str) -> Result<impl Iterator<Item = PathBuf>, PathError<i
         .filter(|path| path.is_dir()))
 }
 
-fn iter_devices(
-    filters: &DeviceFilters,
-) -> Result<impl Iterator<Item = Device> + '_, PathError<io::Error>> {
+fn iter_devices(filters: &DeviceFilters) -> Result<impl Iterator<Item = Device> + '_, PathError> {
     let mut paths: Vec<PathBuf> = if let Some(class) = filters.class {
         iter_paths(class.prefix())?.collect()
     } else {
@@ -293,12 +253,12 @@ fn iter_devices(
 }
 
 #[derive(Debug)]
-pub enum FetchDeviceError {
-    IO(PathError<io::Error>),
+pub enum FetchError {
+    IO(PathError),
     NotFound(DeviceFilters),
 }
 
-impl fmt::Display for FetchDeviceError {
+impl fmt::Display for FetchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::IO(error) => error.fmt(f),
@@ -313,15 +273,15 @@ impl fmt::Display for FetchDeviceError {
     }
 }
 
-impl Error for FetchDeviceError {}
+impl core::error::Error for FetchError {}
 
-impl From<PathError<io::Error>> for FetchDeviceError {
-    fn from(value: PathError<io::Error>) -> Self {
-        FetchDeviceError::IO(value)
+impl From<PathError> for FetchError {
+    fn from(value: PathError) -> Self {
+        FetchError::IO(value)
     }
 }
 
-type FetchResult<T> = Result<T, FetchDeviceError>;
+type FetchResult<T> = Result<T, FetchError>;
 
 /// Returns all devices matching the given filters.
 pub fn get_devices(filters: &DeviceFilters) -> FetchResult<impl Iterator<Item = Device> + '_> {
@@ -329,7 +289,7 @@ pub fn get_devices(filters: &DeviceFilters) -> FetchResult<impl Iterator<Item = 
     if iter.peek().is_some() {
         Ok(iter)
     } else {
-        Err(FetchDeviceError::NotFound(filters.clone()))
+        Err(FetchError::NotFound(filters.clone()))
     }
 }
 
@@ -338,5 +298,5 @@ pub fn get_devices(filters: &DeviceFilters) -> FetchResult<impl Iterator<Item = 
 pub fn get_device(filters: &DeviceFilters) -> FetchResult<Device> {
     iter_devices(filters)?
         .next()
-        .ok_or_else(|| FetchDeviceError::NotFound(filters.clone()))
+        .ok_or_else(|| FetchError::NotFound(filters.clone()))
 }
